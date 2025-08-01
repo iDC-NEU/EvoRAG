@@ -1,0 +1,43 @@
+
+async () => {{
+    const script = document.createElement('script');
+    script.src = "https://unpkg.com/cytoscape/dist/cytoscape.min.js";
+    document.head.appendChild(script);
+
+    script.onload = () => {{
+        window.graph_fn = () => {{
+            document.getElementById('demo').innerHTML = "";
+            var json_triplet = {};
+
+            var cy = cytoscape({{
+                container: document.getElementById('demo'),
+                elements: json_triplet.nodes.concat(json_triplet.edges),
+                style: [
+                    {{
+                        selector: 'node',
+                        style: {{
+                            'background-color': 'data(color)',
+                            'label': 'data(label)'
+                        }}
+                    }},
+                    {{
+                        selector: 'edge',
+                        style: {{
+                            'line-color': 'data(color)',
+                            'label': 'data(label)',
+                            'width': 2
+                        }}
+                    }}
+                ],
+                layout: {{
+                    name: 'cose',
+                    fit: true,
+                    animate: true,
+                    animationDuration: 1000,
+                    animationEasing: 'ease-in-out'
+                }}
+            }});
+        }};
+    }};
+}}
+

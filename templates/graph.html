@@ -1,0 +1,142 @@
+<!--
+ * @Author: lpz 1565561624@qq.com
+ * @Date: 2024-09-22 15:36:26
+ * @LastEditors: lpz 1565561624@qq.com
+ * @LastEditTime: 2024-09-22 21:35:14
+ * @FilePath: /RAG_demo/RAGWebUi_demo/templates/graph.html
+ * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Text to Graph</title>
+    <script src="https://unpkg.com/cytoscape/dist/cytoscape.min.js"></script>
+    <style>
+        #container {
+            display: flex;
+            height: 100vh;
+        }
+        #cy {
+            flex: 1;
+            border-left: 1px solid #ccc;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="cy"></div>
+    </div>
+    <script>
+        var cy = cytoscape({
+            container: document.getElementById('cy'),
+            elements: [],  // 初始为空
+            style: [
+                {
+                    selector: 'node',
+                    style: {
+                        'background-color': 'data(color)',
+                        'label': 'data(label)',
+                    }
+                },
+                {
+                    selector: 'edge',
+                    style: {
+                        'line-color': 'data(color)',
+                        'target-arrow-color': 'data(color)',
+                        'curve-style': 'bezier',
+                        'target-arrow-shape': 'triangle',
+                        'label': 'data(label)'
+                    }
+                }
+            ],
+            layout: {
+                name: 'cose',
+                fit: true,
+                animate: true,
+                animationDuration: 1000,
+                animationEasing: 'ease-in-out'
+            }
+        });
+
+        function deepClone(obj) {
+            return JSON.parse(JSON.stringify(obj));
+        }
+
+        let lastResponse = null;
+
+        function deepEqual(obj1, obj2) {
+            if (obj1 === obj2) return true; // 引用相同或者是基本类型
+            if (typeof obj1 !== "object" || typeof obj2 !== "object") return false; // 不是对象
+            if (obj1 === null || obj2 === null) return false; // null 情况
+
+            let keys1 = Object.keys(obj1);
+            let keys2 = Object.keys(obj2);
+
+            if (keys1.length !== keys2.length) return false; // 键数量不一样
+
+            for (let key of keys1) {
+                if (key === 'id') {
+                    continue; // 忽略 id 键的比较
+                }
+
+                if (!keys2.includes(key)) return false; // key 不存在
+                if (!deepEqual(obj1[key], obj2[key])) return false; // 递归比较值
+            }
+
+            return true;
+        }
+
+        var event = new Event('myEvent');
+
+        // 每秒触发一次
+        // setInterval(function() {
+        //     document.dispatchEvent(event);  // 触发自定义事件
+        // }, 1000);
+
+        window.addEventListener('DOMContentLoaded', function() {
+            document.dispatchEvent(event);  // 触发自定义事件
+        });
+
+
+        document.addEventListener('myEvent', function() {
+            fetch('/update_graph', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ text: "Request to update graph" }) // 发送简单请求
+            })
+            .then(response => response.json())  // 解析JSON响应
+            .then(data => {
+                // 深度比较两个JSON对象
+                if(lastResponse==null){
+
+                    cy.add(data.nodes);  // 添加节点
+                    cy.add(data.edges);  // 添加边
+                    cy.layout({ name: 'cose' }).run();  // 重新布局
+                    lastResponse = deepClone(data);
+                }
+                else{
+                    
+                    if (!deepEqual(data.nodes, lastResponse.nodes)) {
+                        cy.elements().remove();  // 清除之前的节点和边
+
+                        cy.add(data.nodes);  // 添加节点
+                        cy.add(data.edges);  // 添加边
+                        cy.layout({ name: 'cose' }).run();  // 重新布局
+
+                        // 更新 lastResponse 为当前的深度克隆值
+                        lastResponse = deepClone(data);
+                    } else {
+                        console.log('Graph data is unchanged, skipping update.');
+                    }
+                }
+            })
+            .catch(error => console.error('Error fetching graph data:', error));
+        });
+
+    </script>
+</body>
+</html>
