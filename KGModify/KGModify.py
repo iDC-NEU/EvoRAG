@@ -23,6 +23,8 @@ import statistics
 import json
 import datetime
 import numpy as np
+import torch
+import re
 from ignite.metrics import RougeL
 import time
 import os
@@ -4546,11 +4548,163 @@ class KGModify:
             with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}.json", "w", encoding="utf-8") as f:
                 f.write(json.dumps(forward_data, indent=2))
 
-    def retrieve_path_with_keywords_module(self, method, question, keywords = [], path_depth = 2, pruning = 10, threshold=0.55, score_threshold = 71, score_weight = 0.5, top_k_per_entity = True, build_node = False):
+    def retrieve_path_with_keywords_module(self, method, question, keywords = [], path_depth = 2, pruning = 10, threshold=0.55, score_threshold = 71, score_weight = 0.5, top_k_per_entity = True, build_node = False, score_min = 20.0, score_max = 200.0):
         if method == 'basic':
             return self.retriver.retrieve_path_with_keywords_basic(question, keywords, path_depth, pruning, threshold, score_threshold, build_node)
         elif method == 'standard':
-            return self.retriver.retrieve_path_with_keywords_standard(question, keywords, path_depth, pruning, score_weight, top_k_per_entity, build_node)
+            return self.retriver.retrieve_path_with_keywords_standard(
+                question, keywords, path_depth, pruning, score_weight,
+                top_k_per_entity, build_node, score_min, score_max
+            )
+
+    def _standard_state_path(self, iteration):
+        return Path("./logs") / self.args.algorithm / "state" / f"{self.args.space_name}_{iteration}.json"
+
+    def _load_standard_state(self):
+        state_path = self._standard_state_path(self.args.iteration)
+        if not state_path.exists():
+            return
+        with open(state_path, "r", encoding="utf-8") as file:
+            state = json.load(file)
+        alpha = state.get("alpha")
+        if isinstance(alpha, (int, float)):
+            self.args.score_weight = float(np.clip(alpha, 0.0, 1.0))
+            self.logger.log(f"Loaded standard alpha: {self.args.score_weight}")
+
+    def _save_standard_state(self):
+        state_path = self._standard_state_path(self.args.iteration + 1)
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(state_path, "w", encoding="utf-8") as file:
+            json.dump({"alpha": float(self.args.score_weight)}, file, indent=2)
+
+    @staticmethod
+    def _standard_triple_keys(triple):
+        head, relation, tail, direction = triple
+        if direction == "->":
+            return f"{head} {relation} {tail}", f"{head} {relation.replace('_', ' ')} {tail}"
+        if direction == "<-":
+            return f"{tail} {relation} {head}", f"{tail} {relation.replace('_', ' ')} {head}"
+        raise ValueError(f"Unsupported triple direction: {direction}")
+
+    def _standard_score_snapshot(self, filtered_triple_3d):
+        snapshot = {}
+        for path in filtered_triple_3d:
+            for triple in path:
+                key, _ = self._standard_triple_keys(triple)
+                if key in self.triplets_score_modify:
+                    snapshot[key] = self.triplets_score_modify[key]["score"]
+        return snapshot
+
+    def _apply_standard_autograd_update(
+        self,
+        response_dict,
+        filtered_triple_3d,
+        flag_TF,
+        feedback_noise,
+        args_param,
+        sim_map,
+        forward_scores,
+        forward_alpha,
+    ):
+        """Apply Formula (2)-(4) with an autograd-derived SGD update."""
+        if not filtered_triple_3d:
+            return
+
+        path_keys = []
+        display_by_key = {}
+        ordered_keys = []
+        for path in filtered_triple_3d:
+            keys = []
+            for triple in path:
+                key, display = self._standard_triple_keys(triple)
+                if key not in forward_scores:
+                    self.logger.log(f"Skip standard update: missing forward score for {key}")
+                    return
+                keys.append(key)
+                display_by_key[key] = display
+                if key not in ordered_keys:
+                    ordered_keys.append(key)
+            if not keys:
+                self.logger.log("Skip standard update: retrieved an empty path")
+                return
+            path_keys.append(keys)
+
+        score_min = float(args_param.score_min)
+        score_max = float(args_param.score_max)
+        if score_max <= score_min:
+            raise ValueError("score_max must be greater than score_min for standard feedback")
+
+        contribution_scores = torch.tensor(
+            [
+                float(np.clip(
+                    (float(forward_scores[key]) - score_min) / (score_max - score_min),
+                    0.0,
+                    1.0,
+                ))
+                for key in ordered_keys
+            ],
+            dtype=torch.float64,
+            requires_grad=True,
+        )
+        alpha = torch.tensor(float(forward_alpha), dtype=torch.float64, requires_grad=True)
+        similarities = torch.tensor(
+            [float(sim_map.get(display_by_key[key], 0.0)) for key in ordered_keys],
+            dtype=torch.float64,
+        )
+        key_index = {key: index for index, key in enumerate(ordered_keys)}
+
+        triplet_probs = (1.0 - alpha) * similarities + alpha * contribution_scores
+        triplet_probs = torch.clamp(triplet_probs, min=torch.finfo(torch.float64).eps)
+        path_logits = torch.stack([
+            torch.log(triplet_probs[[key_index[key] for key in keys]]).mean()
+            for keys in path_keys
+        ])
+        path_probs = torch.softmax(path_logits, dim=0)
+
+        if feedback_noise:
+            flag_TF = not flag_TF
+        utility_sign = 1.0 if flag_TF else -1.0
+        epsilon = torch.finfo(torch.float64).eps
+        utilities = torch.tensor(
+            [
+                utility_sign * 0.4 * float(response_dict["Path_score"].get(f"Path {path_id}", 0.0))
+                for path_id in range(len(path_keys))
+            ],
+            dtype=torch.float64,
+        )
+        # Keep E[U] strictly inside (0, 1). The epsilon belongs on the
+        # probability/utility boundary, not as a replacement for a zero loss.
+        utilities = torch.clamp(utilities, -1.0 + epsilon, 1.0 - epsilon)
+        expected_utility = torch.sum(path_probs * (utilities + 1.0) / 2.0)
+        loss = -torch.log(expected_utility)
+
+        optimizer = torch.optim.SGD([contribution_scores, alpha], lr=float(args_param.lr))
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        with torch.no_grad():
+            contribution_scores.clamp_(0.0, 1.0)
+            alpha.clamp_(0.0, 1.0)
+
+        updated_scores = (
+            contribution_scores.detach() * (score_max - score_min) + score_min
+        ).tolist()
+        for key, updated_score in zip(ordered_keys, updated_scores):
+            if key not in self.triplets_score_modify:
+                continue
+            score_delta = updated_score - float(forward_scores[key])
+            old_score = self.triplets_score_modify[key]["score"]
+            new_score = float(np.clip(old_score + score_delta, score_min, score_max))
+            self.triplets_score_modify[key]["score"] = new_score
+            self.logger.log(f"{key}, old score: {old_score}, new score: {new_score}")
+
+        alpha_delta = alpha.item() - float(forward_alpha)
+        old_alpha = float(args_param.score_weight)
+        args_param.score_weight = float(np.clip(old_alpha + alpha_delta, 0.0, 1.0))
+        self.logger.log(
+            f"standard autograd loss: {loss.item():.8f}, expected utility: {expected_utility.item():.8f}, "
+            f"alpha: {old_alpha:.8f} -> {args_param.score_weight:.8f}"
+        )
     # 冗余处理
     def redundant_process(self, method, filtered_triple_3d, index):
         redundancy_start_time = time.perf_counter()
@@ -4899,114 +5053,29 @@ class KGModify:
             return llm_feedback_end_time - llm_feedback_start_time, feedback_process_end_time - feedback_process_start_time
 
     
-    def feedback_process_one(self, method, filtered_retrieve_result, response_dict, filtered_triple_3d, flag_TF, feedback_noise, filtered_probs, filtered_dict, pt_list_standard, args_param, sim_map, score_map):
+    def feedback_process_one(self, method, filtered_retrieve_result, response_dict, filtered_triple_3d, flag_TF, feedback_noise, filtered_probs, filtered_dict, pt_list_standard, args_param, sim_map, score_map, standard_forward_scores=None, standard_forward_alpha=None):
         # feedback_process_start_time = time.perf_counter()
         if method == 'standard_for_path_shared_prefix':
-            score_weight = args_param.score_weight
-            lr = args_param.lr
-            import math
             context = ""
             for idx, sentence in enumerate(filtered_retrieve_result, start=0):
                 context += f"Path {idx}:\t{sentence}\n"
             self.logger.log(f"{context}")
             self.logger.log(f"{json.dumps(response_dict, indent=2)}")
-            # assert False
-            # print(type(response_dict))
-            # print(response_dict)
-            if feedback_noise:
-                flag_TF = not flag_TF
-                print(f"----------------feedback_noise-------------: original: {not flag_TF}, now: {flag_TF}")
             if response_dict['Insufficient_information']:
                 self.logger.log(f"Insufficient_information is True, no feedback processed.")
-                pass
             else:
-                if not flag_TF: # 根据对错反转反馈
-                    new_dict = {key: -value * 0.4 for key, value in response_dict['Path_score'].items()}
-                    response_dict['Path_score'] = new_dict
-                else:
-                    new_dict = {key: value * 0.4 for key, value in response_dict['Path_score'].items()}
-                    response_dict['Path_score'] = new_dict
-                # print(f"{json.dumps(response_dict, indent=2)}")
-                # 计算期望
-                EUL = 0
-                AVGU = 0
-                VLlist = {}
-                # 所有都在计算，只不过有大量的反馈是0
-                # for path_id, (path, pl) in enumerate(zip(filtered_retrieve_result, filtered_probs)):
-                for path_id, pl in enumerate(filtered_probs):
-                    EUL += (response_dict['Path_score'].get(f"Path {path_id}", 0) + 1) / 2 * pl
-                    # print(f"{response_dict['Path_score'].get(f'Path {path_id}', 0)} {(response_dict['Path_score'].get(f'Path {path_id}', 0) + 1) / 2 * pl}")
-                    AVGU += response_dict['Path_score'].get(f"Path {path_id}", 0) * pl
-                # for path_id, (path, pl) in enumerate(zip(filtered_retrieve_result, filtered_probs)):
-                for path_id, pl in enumerate(filtered_probs):
-                    VLlist[f"Path {path_id}"] = pl * (response_dict['Path_score'].get(f"Path {path_id}", 0) - AVGU) / len(filtered_triple_3d[path_id])
-                
-                self.logger.log(f"Expected Utility of the LLM (EUL): {EUL}")
-                self.logger.log(f"Average Utility of the LLM (AVGU): {AVGU}")
-                # self.logger.log(f"Variance of the LLM (VL): {json.dumps(VLlist, indent=2)}")
-        
-                # 取负对数
-                LEUL = -math.log(EUL) 
-                triple_map = {}
-                for idx, path in enumerate(filtered_triple_3d):
-                    for triple in path:
-                        if triple[3] == '->':
-                            sentence = f"{triple[0]} {triple[1]} {triple[2]}"
-                        elif triple[3] == '<-':
-                            sentence = f"{triple[2]} {triple[1]} {triple[0]}"
-                        if sentence in triple_map:
-                            triple_map[sentence].append(idx)
-                        else:
-                            triple_map[sentence] = [idx]
-                grad_weight = 0
-                for path_id, (path, pl) in enumerate(zip(filtered_triple_3d, filtered_probs)):
-                    # 对于未反馈的是否更新
-                    if f"Path {path_id}" in response_dict['Path_score']:
-                        for triple in path:
-                            if triple[3] == '->':
-                                sentence = f"{triple[0]} {triple[1]} {triple[2]}"
-                                sentence_s = f"{triple[0]} {triple[1].replace('_',' ')} {triple[2]}"
-                            elif triple[3] == '<-':
-                                sentence = f"{triple[2]} {triple[1]} {triple[0]}"
-                                sentence_s = f"{triple[2]} {triple[1].replace('_',' ')} {triple[0]}"
-                            plset = 0
-                            for path_index in triple_map.get(sentence, []): # 拿到包含t的所有L
-                                # if f"Path {path_index}" in response_dict['Path_score']: # 反馈了才计算
-                                #     if flag_TF:
-                                #         plset *= filtered_probs[path_index] * VLlist.get(f"Path {path_index}", 0) # 不知道乘上Vi对不对
-                                #     else:
-                                #         plset *= filtered_probs[path_index] * -VLlist.get(f"Path {path_index}", 0) # 不知道乘上Vi对不对
-                                plset += filtered_probs[path_index] * VLlist.get(f"Path {path_index}") 
-                            grad_t = - (score_weight / (2 * EUL)) * (plset / pt_list_standard[filtered_dict[sentence]])
-                            grad_weight_t = ((sim_map.get(sentence_s) - score_map.get(sentence_s)) / (2 * EUL)) * (plset / pt_list_standard[filtered_dict[sentence]])
-                            grad_weight += grad_weight_t
-                            # self.logger.log(f"sentence_s: {sentence_s}, sim: {sim_map.get(sentence_s, 0)}, score: {score_map.get(sentence_s, 0)}, grad_weight_t: {grad_weight_t}, grand_weight: {grad_weight}")
-                            
-                            if sentence in self.triplets_score_modify:
-                                old_score = self.triplets_score_modify[sentence]['score']
-                                # if flag_TF:
-                                #     isNegative = 1
-                                # else:
-                                #     isNegative = -1
-                                new_score = old_score - grad_t * lr
-                                if new_score > self.args.score_max:
-                                    new_score = self.args.score_max
-                                if new_score < self.args.score_min:
-                                    new_score = self.args.score_min
-                                self.triplets_score_modify[sentence]['score'] = new_score
-                                self.logger.log(f" {sentence}, old score: {old_score}, grad: {grad_t}, new score : {new_score}")
-                            else:
-                                self.logger.log(f" {sentence}, the retrival result don't exit in triplets score &&&&&")
-
-                # 处理学习率
-                self.logger.log(f"old score_weight : {score_weight}, grad_weight : {grad_weight}, lr: {lr}")
-                score_weight = score_weight - grad_weight * lr * 1e-3
-                self.logger.log(f"new score_weight (before clamp): {score_weight}")
-                if score_weight < 0.1:
-                    score_weight = 0.1
-                if score_weight > 0.9:    
-                    score_weight = 0.9
-                self.logger.log(f"new score_weight : {score_weight}")
+                forward_scores = standard_forward_scores or self._standard_score_snapshot(filtered_triple_3d)
+                forward_alpha = args_param.score_weight if standard_forward_alpha is None else standard_forward_alpha
+                self._apply_standard_autograd_update(
+                    response_dict=response_dict,
+                    filtered_triple_3d=filtered_triple_3d,
+                    flag_TF=flag_TF,
+                    feedback_noise=feedback_noise,
+                    args_param=args_param,
+                    sim_map=sim_map,
+                    forward_scores=forward_scores,
+                    forward_alpha=forward_alpha,
+                )
 
         elif method == "basic_for_triplet_shared_prefix":
             # 此时 filtered_retrieve_result 是 triplet_unique
@@ -6145,10 +6214,14 @@ class KGModify:
                 logger = Logger(f"./{self.args.algorithm}/data/{self.args.llmbackend}_{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}")
                 
         self.logger = logger
-        self.retriver.triplets_score = triplets_score # 传递给retriver
         self.retriver.logger = logger # 传递给retriver
         self.triplets_score = triplets_score
         self.triplets_score_modify = copy.deepcopy(triplets_score)
+        self.retriver.triplets_score = triplets_score # 传递给retriver
+        if self.args.feedback_process == 'standard_for_path_shared_prefix':
+            self._load_standard_state()
+            # Standard retrieval must observe the scores updated by previous batches.
+            self.retriver.triplets_score = self.triplets_score_modify
         # 是否是中断继续跑
         # if self.args.feedback:
         #     path = f"./logs/{self.args.algorithm}/triplets/{self.args.space_name}_{self.args.iteration+1}.json"
@@ -6564,7 +6637,7 @@ class KGModify:
                         # triple_result_average += len(triple_result)
                         
                     elif self.args.retrieve_path == 'standard':
-                        filtered_retrieve_result, filtered_triple_3d, filtered_probs, filtered_dict, pt_list_standard, sim_map, score_map, nebula_retrieve_time, filter_retrieve_time = self.retrieve_path_with_keywords_module(method = self.args.retrieve_path, question=self.dataset.query[index], keywords=data[index]['keywords'], path_depth = self.args.hop, pruning=self.args.pruning, threshold=self.args.simThreshold, score_threshold = self.args.scoreThreshold, score_weight = self.args.score_weight, top_k_per_entity=self.args.top_k_per_entity) # 10*30
+                        filtered_retrieve_result, filtered_triple_3d, filtered_probs, filtered_dict, pt_list_standard, sim_map, score_map, nebula_retrieve_time, filter_retrieve_time = self.retrieve_path_with_keywords_module(method = self.args.retrieve_path, question=self.dataset.query[index], keywords=data[index]['keywords'], path_depth = self.args.hop, pruning=self.args.pruning, threshold=self.args.simThreshold, score_threshold = self.args.scoreThreshold, score_weight = self.args.score_weight, top_k_per_entity=self.args.top_k_per_entity, score_min=self.args.score_min, score_max=self.args.score_max) # 10*30
                         data[index]['filtered_retrieve_result'] = filtered_retrieve_result # 给大模型的句子，带symbol
                         data[index]['filtered_triple_3d'] = filtered_triple_3d # 带symbol len = 4
                         data[index]['filtered_probs'] = filtered_probs
@@ -6572,6 +6645,8 @@ class KGModify:
                         data[index]['pt_list_standard'] = pt_list_standard
                         data[index]['sim_map'] = sim_map
                         data[index]['score_map'] = score_map
+                        data[index]['standard_forward_scores'] = self._standard_score_snapshot(filtered_triple_3d)
+                        data[index]['standard_forward_alpha'] = self.args.score_weight
                         
                         # logger.log(f"filtered_probs : {json.dumps(filtered_probs, indent=2)}")
                         # logger.log(f"filtered_dict : {json.dumps(filtered_dict, indent=2)}")
@@ -6815,7 +6890,9 @@ class KGModify:
                             pt_list_standard = data[index]['pt_list_standard'], 
                             args_param = self.args, 
                             sim_map = data[index]['sim_map'], 
-                            score_map = data[index]['score_map'],)
+                            score_map = data[index]['score_map'],
+                            standard_forward_scores = data[index].get('standard_forward_scores'),
+                            standard_forward_alpha = data[index].get('standard_forward_alpha'),)
                         feedback_process_end_time = time.perf_counter()
                         feedback_process_time = feedback_process_end_time - feedback_process_start_time
                         logger.log(f"feedback_process_time: {feedback_process_time} seconds")
@@ -6907,6 +6984,8 @@ class KGModify:
         if self.args.feedback:    
             with open(f"./logs/{self.args.algorithm}/triplets/{self.args.space_name}_{self.args.iteration+1}.json", "w", encoding="utf-8") as file:
                 json.dump(self.triplets_score_modify, file, ensure_ascii=False, indent=2)
+            if self.args.feedback_process == 'standard_for_path_shared_prefix':
+                self._save_standard_state()
         
         if self.args.only_error:
             with open(f"./logs/{self.args.algorithm}/stage/error_index_{self.args.space_name}_{self.args.llm}_{self.args.iteration}.json", 'w', encoding='utf-8') as file:
@@ -7957,6 +8036,211 @@ class KGModify:
         output2 = self.graphrag.chat_without_stream_short_cut(triplets2)
         print(json.dumps(output2, indent = 2))
 
+    def _relation_evolution_config(self):
+        config = getattr(self.args, "relation_evolution", {})
+
+        def get_value(name, default):
+            if hasattr(config, name):
+                return getattr(config, name)
+            if isinstance(config, dict):
+                return config.get(name, default)
+            return default
+
+        return {
+            "enabled": bool(get_value("enabled", True)),
+            "max_hop": max(2, int(get_value("max_hop", self.args.hop))),
+            "low_score_patience": max(1, int(get_value("low_score_patience", 2))),
+            "soft_suppression": bool(get_value("soft_suppression", True)),
+            "low_score_decay": max(0.0, float(get_value("low_score_decay", 1.0))),
+            "prune_low_score": bool(get_value("prune_low_score", False)),
+            "shortcut_relation_prefix": str(get_value("shortcut_relation_prefix", "shortcut")),
+            "shortcut_label_mode": str(get_value("shortcut_label_mode", "llm")),
+        }
+
+    def _relation_evolution_state_path(self, iteration):
+        return (
+            Path("./logs") / self.args.algorithm / "state" / "relation_evolution"
+            / f"{self.args.space_name}_{iteration}.json"
+        )
+
+    def _load_relation_evolution_state(self):
+        state_path = self._relation_evolution_state_path(self.args.iteration)
+        if not state_path.exists():
+            return {"low_score_streak": {}}
+        with open(state_path, "r", encoding="utf-8") as file:
+            state = json.load(file)
+        if not isinstance(state.get("low_score_streak"), dict):
+            state["low_score_streak"] = {}
+        return state
+
+    def _save_relation_evolution_state(self, state):
+        state_path = self._relation_evolution_state_path(self.args.iteration + 1)
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(state_path, "w", encoding="utf-8") as file:
+            json.dump(state, file, ensure_ascii=False, indent=2)
+
+    @staticmethod
+    def _shortcut_relation_signature(path, prefix):
+        relation_parts = [str(triplet[1]).replace(" ", "_") for triplet in path]
+        return "__".join([prefix, *relation_parts])
+
+    def _shortcut_relation_label(self, path, config):
+        fallback = self._shortcut_relation_signature(path, config["shortcut_relation_prefix"])
+        if config["shortcut_label_mode"] != "llm":
+            return fallback
+
+        path_payload = [
+            {
+                "source_node": triple[0],
+                "relationship": triple[1],
+                "target_node": triple[2],
+            }
+            for triple in path
+        ]
+        prompt = (
+            "Infer a concise relation label for the shortcut between the first source "
+            "and final target in this knowledge-graph path. Return only JSON in the "
+            "form {\"label\": \"lowercase_relation_label\"}.\n"
+            f"Path: {json.dumps(path_payload, ensure_ascii=False)}"
+        )
+        try:
+            output = self.llm.chat_with_ai_with_system("", prompt)
+            parsed = json.loads(output)
+            label = parsed.get("label")
+            if not isinstance(label, str) or not label.strip():
+                raise ValueError("missing shortcut label")
+            normalized = re.sub(r"[^A-Za-z0-9_]+", "_", label.strip().lower())
+            return normalized.strip("_") or fallback
+        except Exception as error:
+            self.logger.log(f"Shortcut label inference failed; using path signature: {error}")
+            return fallback
+
     def short_cut_for_graphdatabase(self):
-        print(f"short_cut_for_graphdatabase")
-        pass
+        """Implement paper Section V-A relation fusion and suppression."""
+        config = self._relation_evolution_config()
+        if not config["enabled"]:
+            return
+        if not self.args.feedback:
+            self.logger.log("Relation evolution skipped: feedback is disabled.")
+            return
+
+        scored_triplets = []
+        for key, value in self.triplets_score_modify.items():
+            triplet = value.get("triplet")
+            score = value.get("score")
+            if not isinstance(triplet, list) or len(triplet) != 3:
+                continue
+            if not isinstance(score, (int, float)) or not np.isfinite(score):
+                continue
+            scored_triplets.append((key, triplet, float(score)))
+        if not scored_triplets:
+            self.logger.log("Relation evolution skipped: no scored triplets.")
+            return
+
+        scores = np.array([score for _, _, score in scored_triplets], dtype=float)
+        score_mean = float(np.mean(scores))
+        score_std = float(np.std(scores))
+        high_threshold = score_mean + score_std
+        low_threshold = score_mean - score_std
+        state = self._load_relation_evolution_state()
+        streaks = state["low_score_streak"]
+        current_keys = {key for key, _, _ in scored_triplets}
+        streaks = {key: int(streak) for key, streak in streaks.items() if key in current_keys}
+
+        soft_suppressed = []
+        pruned = []
+        for key, _, score in scored_triplets:
+            if score < low_threshold:
+                streaks[key] = streaks.get(key, 0) + 1
+                if streaks[key] >= config["low_score_patience"]:
+                    if config["soft_suppression"]:
+                        updated_score = max(self.args.score_min, score - config["low_score_decay"])
+                        if updated_score != score:
+                            self.triplets_score_modify[key]["score"] = updated_score
+                            soft_suppressed.append(key)
+                    if config["prune_low_score"]:
+                        self.triplets_score_modify.pop(key, None)
+                        streaks.pop(key, None)
+                        pruned.append(key)
+            else:
+                streaks.pop(key, None)
+
+        # Use the pre-suppression high-score graph for this iteration's fusion.
+        high_triplets = [
+            (key, triplet, score)
+            for key, triplet, score in scored_triplets
+            if key not in pruned and score >= high_threshold
+        ]
+        adjacency = {}
+        endpoint_pairs = {
+            (str(value["triplet"][0]), str(value["triplet"][2]))
+            for value in self.triplets_score_modify.values()
+            if isinstance(value.get("triplet"), list) and len(value["triplet"]) == 3
+        }
+        for item in high_triplets:
+            adjacency.setdefault(str(item[1][0]), []).append(item)
+        for neighbors in adjacency.values():
+            neighbors.sort(key=lambda item: item[2], reverse=True)
+
+        created_shortcuts = []
+        for _, start_triplet, _ in high_triplets:
+            start_head = str(start_triplet[0])
+            queue = [(start_triplet, [start_triplet], {start_head, str(start_triplet[2])})]
+            while queue:
+                current_triplet, path, visited_entities = queue.pop(0)
+                if len(path) >= config["max_hop"]:
+                    continue
+                for _, neighbor, _ in adjacency.get(str(current_triplet[2]), []):
+                    target = str(neighbor[2])
+                    if target in visited_entities:
+                        continue
+                    next_path = [*path, neighbor]
+                    next_entities = visited_entities | {target}
+                    if len(next_path) >= 2:
+                        path_score = sum(
+                            float(self.triplets_score_modify[
+                                f"{triple[0]} {triple[1]} {triple[2]}"
+                            ]["score"])
+                            for triple in next_path
+                        ) / len(next_path)
+                        endpoint_pair = (start_head, target)
+                        if path_score >= high_threshold and endpoint_pair not in endpoint_pairs:
+                            relation = self._shortcut_relation_label(next_path, config)
+                            shortcut_key = f"{start_head} {relation} {target}"
+                            shortcut = [start_head, relation, target]
+                            try:
+                                self.graph_database.upsert_triplet(shortcut)
+                            except Exception as error:
+                                self.logger.log(
+                                    f"Relation fusion failed for {shortcut_key}: {error}"
+                                )
+                            else:
+                                self.triplets_score_modify[shortcut_key] = {
+                                    "triplet": shortcut,
+                                    "score": path_score,
+                                }
+                                endpoint_pairs.add(endpoint_pair)
+                                created_shortcuts.append({
+                                    "triplet": shortcut,
+                                    "score": path_score,
+                                    "source_path": next_path,
+                                })
+                    queue.append((neighbor, next_path, next_entities))
+
+        state["low_score_streak"] = streaks
+        state["last_summary"] = {
+            "mean": score_mean,
+            "std": score_std,
+            "high_threshold": high_threshold,
+            "low_threshold": low_threshold,
+            "soft_suppressed": soft_suppressed,
+            "pruned": pruned,
+            "shortcuts": created_shortcuts,
+        }
+        self._save_relation_evolution_state(state)
+        self.logger.log(
+            "Relation evolution: "
+            f"mean={score_mean:.6f}, std={score_std:.6f}, "
+            f"shortcuts={len(created_shortcuts)}, "
+            f"soft_suppressed={len(soft_suppressed)}, pruned={len(pruned)}"
+        )

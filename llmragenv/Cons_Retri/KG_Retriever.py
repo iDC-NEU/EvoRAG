@@ -765,7 +765,7 @@ class RetrieverGraph(object):
         # return result_final, result_final_to_triple_3d
 
     # +++
-    def retrieve_path_with_keywords_standard(self, question, keywords = [], path_depth = 2, pruning = 10, score_weight = 0.5, top_k_per_entity = True, build_node = False):
+    def retrieve_path_with_keywords_standard(self, question, keywords = [], path_depth = 2, pruning = 10, score_weight = 0.5, top_k_per_entity = True, build_node = False, score_min = 20.0, score_max = 200.0):
         nebula_retrieve_start_time = time.perf_counter()
         self.pruning = pruning
         triplets_score = self.triplets_score
@@ -858,13 +858,13 @@ class RetrieverGraph(object):
         #     # print(f"sentence: {sentence}, sim: {sim}")
         #     self.logger.log(f"question: {question[:30]} sentence{idx}: {sentence}, sim: {sim}")  
 
-        # 归一化
-        if scores_array.max() == scores_array.min():
-            # score_normalized = np.ones_like(scores_array) # 全1
-            score_normalized = np.full_like(scores_array, 0.5, dtype=float) # 全0.5
-        else:
-            # 如果直接这样启动，那么将得到0，那样归一化之后是nan
-            score_normalized = (scores_array - scores_array.min()) / (scores_array.max() - scores_array.min())
+        # Sc(t) must be stable across queries. Per-candidate min-max scaling makes
+        # the same triplet receive a different contribution score for each query.
+        if score_max <= score_min:
+            raise ValueError("score_max must be greater than score_min for standard retrieval")
+        score_normalized = np.clip(
+            (scores_array - score_min) / (score_max - score_min), 0.0, 1.0
+        )
 
         sim_map = {}
         score_map = {}
@@ -881,7 +881,9 @@ class RetrieverGraph(object):
                 # 计算三元组选择概率
                 # pt = (1 - score_weight) * sim + score_weight * score * sim
                 pt = (1 - score_weight) * sim + score_weight * score
-                pt_list_standard.append(pt)
+                # Sr(t) and Sc(t) can both reach zero at the lower boundary.
+                # Formula (3) takes log(P(t)), so preserve a finite logit.
+                pt_list_standard.append(max(pt, np.finfo(float).eps))
         
         # self.logger.log(f"sentence_list and pt_list_standard:")
         # for idx, (sentence, pt) in enumerate(sorted(list(zip(sentence_list, pt_list_standard)), key=lambda x: x[1], reverse=True)):
@@ -958,6 +960,13 @@ class RetrieverGraph(object):
             # 结果句子 结果三元组 结果概率 字典：单跳对应序号（理论上就是有序的）三元组概率
             # result_dict, pt_list_standard  同时存在是多此一举啊
             filter_retrieve_end_time = time.perf_counter()
+            # Formula (4) treats the paths passed to the evaluator as a probability
+            # distribution. Re-normalize after top-k has removed candidates.
+            final_prob_total = sum(final_probs)
+            if final_prob_total > 0:
+                final_probs = [prob / final_prob_total for prob in final_probs]
+            elif final_probs:
+                final_probs = [1.0 / len(final_probs)] * len(final_probs)
             return final_symbols, final_triples, final_probs, result_dict, pt_list_standard, sim_map, score_map, nebula_retrieve_end_time - nebula_retrieve_start_time, filter_retrieve_end_time - filter_retrieve_start_time
 
         else:
@@ -975,6 +984,11 @@ class RetrieverGraph(object):
             topk_symbols = list(topk_symbols)
             topk_triples = list(topk_triples)  # 每个元素仍是 list（即二维列表）
             filter_retrieve_end_time = time.perf_counter()
+            topk_prob_total = sum(topk_probs)
+            if topk_prob_total > 0:
+                topk_probs = [prob / topk_prob_total for prob in topk_probs]
+            elif topk_probs:
+                topk_probs = [1.0 / len(topk_probs)] * len(topk_probs)
             return topk_symbols, topk_triples, topk_probs, result_dict, pt_list_standard, sim_map, score_map, nebula_retrieve_end_time - nebula_retrieve_start_time, filter_retrieve_end_time - filter_retrieve_start_time
 
     # +++

@@ -114,6 +114,17 @@ redundancy: false # 是否处理冗余关系
 feedback: true # 是否进行反馈
 rate: 0.0 # feedback noise rate
 
+# 论文 V-A 的关系中心演化。默认保留全部低分三元组，只软抑制其贡献分数。
+relation_evolution:
+  enabled: true
+  max_hop: 2
+  low_score_patience: 2
+  soft_suppression: true
+  low_score_decay: 1.0
+  prune_low_score: false
+  shortcut_relation_prefix: "shortcut"
+  shortcut_label_mode: "llm"
+
 
 llm_batch:
   graphrag_response: "llm_only"
@@ -156,7 +167,7 @@ evolve_shared_prefix:
   redundant_process: "basic_only_relationship_strict" # 仅处理冗余关系，并且严格按照头尾相同分组
   feedback_process: "standard_for_path_shared_prefix" # 对路径评分
   top_k_per_entity: true 
-  lr : 5000000 
+  lr : 0.5
   
 
 standard_batch: # 标准方法
@@ -169,7 +180,7 @@ standard_batch: # 标准方法
   redundant_process: "basic_only_relationship_strict" # 仅处理冗余关系，并且严格按照头尾相同分组
   feedback_process: "standard_for_path_shared_prefix" # 对路径评分
   top_k_per_entity: true 
-  lr : 5000000 
+  lr : 0.5
   
 
 basic_batch: # 基础方法, 优化的  使用中！
