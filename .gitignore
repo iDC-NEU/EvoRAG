@@ -25,6 +25,7 @@ __pycache__/
 
 /logs_bak
 /logs/*
+!/logs/.gitkeep
 
 
 # # 忽略 logs 下所有内容
