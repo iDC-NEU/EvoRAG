@@ -4,7 +4,7 @@
 *.json
 temp
 # 忽略所有名称为temp的文件夹
-/config/path-local.yaml
+# /config/path-local.yaml
 __pycache__/
 
 # 1. 忽略 datset/ 目录下的所有内容

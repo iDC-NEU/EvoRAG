@@ -1,0 +1,43 @@
+# 本地嵌入路径（含cache） nebulagraph使用
+local_embedding_path: /home/hdd/zhangyz/rag-data
+
+# 嵌入模型使用默认地址
+# 大模型参数路径
+
+
+LLM:
+  vllm:
+    Llama-3-8B-Instruct:
+      template_format: Llama
+      modelpath: /home/hdd/model/Meta-Llama-3-8B-Instruct
+    Llama-3.1-8B-Instruct:
+      template_format: Llama
+      modelpath: /home/hdd/model/Llama-3.1-8B-Instruct
+    Qwen2.5-32B-Instruct:
+      template_format: Qwen2.5
+      modelpath: /home/hdd/model/Qwen2.5-32B-Instruct
+    Qwen3-32B:
+      template_format: Qwen3
+      modelpath: /home/hdd/zhangyz/huggingface_local/models--Qwen--Qwen3-32B/models--Qwen--Qwen3-32B
+
+  huggingface:
+    Llama-3-8B-Instruct:
+      template_format: Llama
+      modelpath: /home/hdd/model/Meta-Llama-3-8B-Instruct
+      access_token: ''
+    Llama-3.1-8B-Instruct:
+      template_format: Llama
+      modelpath: /home/hdd/model/Llama-3.1-8B-Instruct
+      access_token: ''
+    Qwen2.5-32B-Instruct:
+      template_format: Qwen
+      modelpath: /home/hdd/model/Qwen2.5-32B-Instruct
+      access_token: ''
+    Qwen3-32B:
+      template_format: Qwen3
+      modelpath: /home/hdd/zhangyz/huggingface_local/models--Qwen--Qwen3-32B/models--Qwen--Qwen3-32B
+      access_token: ''
+
+
+
+    
