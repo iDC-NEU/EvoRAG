@@ -6,12 +6,13 @@
 DB="rgb_zyz" # nebulagraph数据库图空间名称
 DATA="rgb" # 数据集名称
 PROC=1
-START=7 # 起始 iteration
-END=13 # 最后一个 iteration（不包含这个数）
+START=0 # 起始 iteration
+END=7 # 最后一个 iteration（不包含这个数）
 # ALGORITHM="standard_batch"
-ALGORITHM="basic_batch"
+# ALGORITHM="basic_batch"
+ALGORITHM="leaderboardStrategy"
 # LLM="Llama-3.1-8B-Instruct" # 问答与反馈大模型名称
-LLM="Qwen2.5-32B-Instruct"
+LLM="Qwen2.5-7B-Instruct"
 # LLM="Llama-3-8B-Instruct"
 # LLM="llama3.1:8b-instruct-fp16"
 LLMBACKEND="vllm"
