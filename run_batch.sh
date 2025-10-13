@@ -11,11 +11,11 @@ END=1 # 最后一个 iteration（不包含这个数）
 # ALGORITHM="standard_batch"
 ALGORITHM="basic_batch"
 # LLM="Llama-3.1-8B-Instruct" # 问答与反馈大模型名称
-# LLM="Qwen2.5-32B-Instruct"
+LLM="Qwen2.5-32B-Instruct"
 # LLM="Llama-3-8B-Instruct"
-LLM="llama3.1:8b-instruct-fp16"
-# LLMBACKEND="vllm"
-LLMBACKEND="llama_index"
+# LLM="llama3.1:8b-instruct-fp16"
+LLMBACKEND="vllm"
+# LLMBACKEND="llama_index"
 
 # 遍历 iteration
 for ((i=START; i<END; i++)); do
