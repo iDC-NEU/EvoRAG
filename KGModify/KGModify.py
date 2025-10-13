@@ -5289,9 +5289,11 @@ class KGModify:
         print(f"self.args.iteration: {self.args.iteration}")
         
         # 读取三元组分数
-        if self.args.iteration == 0:
-            with open(f"./logs/{self.args.algorithm}/triplets/{self.args.space_name}_{self.args.iteration}.json", "r", encoding="utf-8") as file:
-                triplets_score = json.load(file)
+        
+        with open(f"./logs/{self.args.algorithm}/triplets/{self.args.space_name}_{self.args.iteration}.json", "r", encoding="utf-8") as file:
+            triplets_score = json.load(file)
+
+        
 
         # 是否使用相似问题
         if self.args.similar:
@@ -5340,7 +5342,7 @@ class KGModify:
 
         
         # self.dataset.query = self.dataset.query[0:len(self.dataset.query)]
-        # self.dataset.query = self.dataset.query[0:10]
+        self.dataset.query = self.dataset.query[0:10]
         data = []
 
         # 加噪声
@@ -5391,7 +5393,7 @@ class KGModify:
             triplet_unique_batch = []
             for i, index in enumerate(range(start_index, end_index)):
                 if self.args.retrieve_path == 'basic':
-                    filtered_retrieve_result, filtered_triple_3d, nebula_retrieve_time, filter_retrieve_time  = self.retrieve_path_with_keywords_module(method = self.args.retrieve_path, question=self.dataset.query[start_index], keywords=data[index]['keywords'], path_depth = self.args.hop, pruning=self.args.pruning, threshold=self.args.simThreshold, score_threshold = self.args.scoreThreshold, score_weight = self.args.score_weight, top_k_per_entity=self.args.top_k_per_entity) # 10*30
+                    filtered_retrieve_result, filtered_triple_3d, nebula_retrieve_time, filter_retrieve_time  = self.retrieve_path_with_keywords_module(method = self.args.retrieve_path, question=self.dataset.query[index], keywords=data[index]['keywords'], path_depth = self.args.hop, pruning=self.args.pruning, threshold=self.args.simThreshold, score_threshold = self.args.scoreThreshold, score_weight = self.args.score_weight, top_k_per_entity=self.args.top_k_per_entity) # 10*30
 
                     data[index]['filtered_retrieve_result'] = filtered_retrieve_result # 给大模型的句子，带symbol
                     data[index]['filtered_triple_3d'] = filtered_triple_3d # 带symbol len = 4
@@ -5406,7 +5408,7 @@ class KGModify:
                     # triple_result_average += len(triple_result)
                     
                 elif self.args.retrieve_path == 'standard':
-                    filtered_retrieve_result, filtered_triple_3d, filtered_probs, filtered_dict, pt_list_standard, sim_map, score_map, nebula_retrieve_time, filter_retrieve_time = self.retrieve_path_with_keywords_module(method = self.args.retrieve_path, question=self.dataset.query[start_index], keywords=data[index]['keywords'], path_depth = self.args.hop, pruning=self.args.pruning, threshold=self.args.simThreshold, score_threshold = self.args.scoreThreshold, score_weight = self.args.score_weight, top_k_per_entity=self.args.top_k_per_entity) # 10*30
+                    filtered_retrieve_result, filtered_triple_3d, filtered_probs, filtered_dict, pt_list_standard, sim_map, score_map, nebula_retrieve_time, filter_retrieve_time = self.retrieve_path_with_keywords_module(method = self.args.retrieve_path, question=self.dataset.query[index], keywords=data[index]['keywords'], path_depth = self.args.hop, pruning=self.args.pruning, threshold=self.args.simThreshold, score_threshold = self.args.scoreThreshold, score_weight = self.args.score_weight, top_k_per_entity=self.args.top_k_per_entity) # 10*30
                     data[index]['filtered_retrieve_result'] = filtered_retrieve_result # 给大模型的句子，带symbol
                     data[index]['filtered_triple_3d'] = filtered_triple_3d # 带symbol len = 4
                     data[index]['filtered_probs'] = filtered_probs
@@ -5501,6 +5503,7 @@ class KGModify:
                         data[index]['feedback_response_time'] = feedback_response_time/len(feedback_response_batch)
                         feedback_prompt.append(prompt_len[i])
                     feedback_response_total_time.append(feedback_response_time)
+                logger.log(f"feedback response time for batch: {feedback_response_time} seconds")
 
             # 记录整个batch的log
             for i, index in enumerate(range(start_index, end_index)):
@@ -5603,7 +5606,8 @@ class KGModify:
 
         logger.log(f"\n\n-----------------------accuracy : {sum(acc_list)/len(data)} acc query: {sum(acc_list)} / total query: {len(data)}-----------------------")
         logger.log(f"-----------------------forward prompt: {sum(forward_prompt)/len(data)}-----------------------")
-        logger.log(f"-----------------------feedback prompt: {sum(feedback_prompt)/len(data)}-----------------------")
+        if self.args.feedback:
+            logger.log(f"-----------------------feedback prompt: {sum(feedback_prompt)/len(data)}-----------------------")
 
         logger.log(f"\n\n-----------------------keywords_total_time: {sum(keywords_total_time)/len(data)}-----------------------")
         logger.log(f"-----------------------nebula retrieve_total_time: {sum(nebula_retrieve_total_time)/len(data)}-----------------------")
@@ -5619,6 +5623,9 @@ class KGModify:
         else:
             with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}.json", "w", encoding="utf-8") as f:
                 f.write(json.dumps(data, indent=2))
+        
+        with open(f"./logs/{self.args.algorithm}/triplets/{self.args.space_name}_{self.args.iteration+1}.json", "w", encoding="utf-8") as file:
+            json.dump(self.triplets_score, file, ensure_ascii=False, indent=2)
 
     def check_one_response(self, response, answer):
         # print(f"response\n{response}")

@@ -635,13 +635,16 @@ class RetrieverGraph(object):
         result_final_to_triple_3d_more = []
         if pruning > 0:
             # for sentences_list, sentence_to_triple_3d  in zip(sentences_2d, sentence_to_triple_4d):
-            for sentences_list, sentence_to_triple_3d  in zip(clean_rel_map_list, sentence_to_triple_4d):
+            # for index_temp, (sentences_list, sentence_to_triple_3d)  in enumerate(zip(sentences_2d, sentence_to_triple_4d)): # 用句子生成嵌入
+            for index_temp, (sentences_list, sentence_to_triple_3d)  in enumerate(zip(clean_rel_map_list, sentence_to_triple_4d)): # 用符号形式的path生成嵌入
 
                 # 路径嵌入复用
-                path2id, path_embeddings = self.graph_database.generate_path_embeddings_with_cache(sentences_list)
+                # path2id, path_embeddings = self.graph_database.generate_path_embeddings_with_cache(sentences_list)
+                # print(f"retrieve {index_temp} len(path2id):{len(path2id)} len(path_embeddings):{len(path_embeddings)}")
                 
-                path_id_list = [path2id[path] for path in sentences_list]
-                selected_embeddings = path_embeddings[path_id_list]
+                # path_id_list = [path2id[path] for path in sentences_list]
+                # selected_embeddings = path_embeddings[path_id_list]
+                selected_embeddings = None
 
                 # rel_scores, max_score, min_score, median_score, mean_score = self.semantic_pruning_sentences_batch_v2(question, sentences_list, rel_embeddings=None, batch_size=8, threshold = threshold)
                 rel_scores, max_score, min_score, median_score, mean_score = self.semantic_pruning_sentences_batch_v2(question, sentences_list, rel_embeddings=selected_embeddings, batch_size=128, threshold = threshold)
@@ -745,7 +748,8 @@ class RetrieverGraph(object):
 
         # return result_filter, result_final, result_final_to_triple_3d, result_final_to_triple_3d_more, max_score, min_score, median_score, mean_score
         filter_retrieve_end_time = time.perf_counter()
-        return result_final_symbol, result_final_to_triple_3d, nebula_retrieve_end_time - nebula_retrieve_start_time, filter_retrieve_end_time - filter_retrieve_start_time
+        return result_final_symbol, result_final_to_triple_3d, nebula_retrieve_end_time - nebula_retrieve_start_time, filter_retrieve_end_time - filter_retrieve_start_time # 返回symbol形式的结果
+        # return result_final, result_final_to_triple_3d, nebula_retrieve_end_time - nebula_retrieve_start_time, filter_retrieve_end_time - filter_retrieve_start_time # 返回句子形式的结果
         # return result_final, result_final_to_triple_3d
 
     # +++

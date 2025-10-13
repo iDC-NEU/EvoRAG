@@ -203,25 +203,52 @@ class HuggingfaceClient(LLMBase):
         # if prompt.startswith(query_start):
         #     return content, num_input_tokens, response_time
                 
-        return content # .replace("<|im_end|>", "")
+        # return content # .replace("<|im_end|>", "")
+        return content, num_input_tokens
     
     @override
-    def chat_with_ai_with_system(self, prompt_system: str, prompt_user: str, history: List[List[str]] | None = None, enable_thinking = False) -> str | None:
+    def chat_with_ai_with_system(self, prompt_system: str | List[str], prompt_user: str | List[str], history: List[List[str]] | None = None, enable_thinking = False) -> str | None:
         # assert False, "HuggingfaceClient does not support chat_with_ai_with_system method. Please use chat_with_ai instead."
-        if self.type == 'Llama':
-            prompt_system_instruct = llama_instruct_system.format(system_instruction = prompt_system)
-            prompt_user_instruct = llama_instruct_user.format(user_instruction = prompt_user)
-        elif self.type == 'Qwen2.5':
-            prompt_system_instruct = qwen2_instruct_system.format(system_instruction = prompt_system)
-            prompt_user_instruct = qwen2_instruct_user.format(user_instruction = prompt_user)
-        elif self.type == 'Qwen3':
-            if enable_thinking:
-                prompt_system_instruct = qwen3_instruct_system.format(system_instruction = prompt_system)
-                prompt_user_instruct = qwen3_instruct_user_think.format(user_instruction = prompt_user)
-            else:
-                prompt_system_instruct = qwen3_instruct_system.format(system_instruction = prompt_system)
-                prompt_user_instruct = qwen3_instruct_user_noThink.format(user_instruction = prompt_user)
-        return self.chat_with_ai(prompt_system_instruct + prompt_user_instruct, history)
+        if isinstance(prompt_system, list):
+            prompt_system_user_instruct = []
+            for prompt_system_item, prompt_user_item in zip(prompt_system, prompt_user):
+                if self.type == 'Llama':
+                    prompt_system_user_instruct.append(llama_instruct_system.format(system_instruction = prompt_system_item)+llama_instruct_user.format(user_instruction = prompt_user_item))
+                elif self.type == 'Qwen2.5':
+                    prompt_system_user_instruct.append(qwen2_instruct_system.format(system_instruction = prompt_system_item)+qwen2_instruct_user.format(user_instruction = prompt_user_item))
+                elif self.type == 'Qwen3':
+                    if enable_thinking:
+                        prompt_system_user_instruct.append(qwen3_instruct_system.format(system_instruction = prompt_system_item)+qwen3_instruct_user_think.format(user_instruction = prompt_user_item))
+                    else:
+                        prompt_system_user_instruct.append(qwen3_instruct_system.format(system_instruction = prompt_system_item)+qwen3_instruct_user_noThink.format(user_instruction = prompt_user_item))
+            return self.chat_with_ai_batch(prompt_system_user_instruct)
+        else:
+            if self.type == 'Llama':
+                prompt_system_instruct = llama_instruct_system.format(system_instruction = prompt_system)
+                prompt_user_instruct = llama_instruct_user.format(user_instruction = prompt_user)
+            elif self.type == 'Qwen2.5':
+                prompt_system_instruct = qwen2_instruct_system.format(system_instruction = prompt_system)
+                prompt_user_instruct = qwen2_instruct_user.format(user_instruction = prompt_user)
+            elif self.type == 'Qwen3':
+                if enable_thinking:
+                    prompt_system_instruct = qwen3_instruct_system.format(system_instruction = prompt_system)
+                    prompt_user_instruct = qwen3_instruct_user_think.format(user_instruction = prompt_user)
+                else:
+                    prompt_system_instruct = qwen3_instruct_system.format(system_instruction = prompt_system)
+                    prompt_user_instruct = qwen3_instruct_user_noThink.format(user_instruction = prompt_user)
+            return self.chat_with_ai(prompt_system_instruct + prompt_user_instruct, history)
+    
+    def chat_with_ai_batch(self, prompt: List[str], history: List[List[str]] | None = None) -> str | None:
+        start_time = time.time()
+        response = []
+        prompt_len = []
+        for prompt_item in prompt:
+            response_item, prompt_len_item = self.chat_with_ai(prompt_item)
+            response.append(response_item)
+            prompt_len.append(prompt_len_item)
+        end_time = time.time()
+
+        return response, prompt_len, end_time - start_time
 
 
     
