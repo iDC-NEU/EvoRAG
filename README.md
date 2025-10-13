@@ -109,10 +109,7 @@ Start everything with one command:
 bash run.sh
 ```
 
-<p align="center">
-  <img src="./resource/workflow.png" width="600" alt="architecture"/>
-</p>
-<p align="center">EvoRAG Workflow Diagram</p>
+![EvoRAG Workflow Diagram](resource/workflow.png)
 
 The EvoRAG workflow, illustrated above, iteratively refines the knowledge graph by incorporating human feedback at each question-answering cycle, thereby continuously boosting the overall performance of the RAG system.
 
