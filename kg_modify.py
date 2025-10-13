@@ -7,7 +7,7 @@ FilePath: /BigModel/RAGWebUi_demo/kg_modify.py
 Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
 '''
 import os
-# os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"  # 必须在导入 torch 或 vllm 之前设置！
+os.environ["CUDA_VISIBLE_DEVICES"] = "1, 2"  # 必须在导入 torch 或 vllm 之前设置！
 import argparse
 
 
@@ -19,10 +19,10 @@ from utils.config import algorithm_config
 from box import Box
 from pathlib import Path
 
-import torch
-import torch.distributed as dist
-from multiprocessing import resource_tracker
-import gc
+# import torch
+# import torch.distributed as dist
+# from multiprocessing import resource_tracker
+# import gc
 
 
 
@@ -32,16 +32,16 @@ def run_with_dataset(args):
     LLMRAGEnv().chat_to_KG_modify(args)
 
 
-def cleanup():
-    # 清理分布式进程组
-    if dist.is_initialized():
-        dist.destroy_process_group()
+# def cleanup():
+#     # 清理分布式进程组
+#     if dist.is_initialized():
+#         dist.destroy_process_group()
 
-    # 手动触发垃圾回收
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
+#     # 手动触发垃圾回收
+#     gc.collect()
+#     if torch.cuda.is_available():
+#         torch.cuda.empty_cache()
+#         torch.cuda.synchronize()
 
 
 
@@ -107,4 +107,4 @@ if __name__ == "__main__":
     run_with_dataset(data)
     # run_with_dataset(args)
 
-    cleanup()
+    # cleanup()

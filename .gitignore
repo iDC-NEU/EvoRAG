@@ -18,6 +18,10 @@ __pycache__/
 
 !/dataset/dataset.py
 !/dataset/extract_triples.py
+!/dataset/Concurrent_process.py
+!/dataset/Hotpotqa_process.py
+!/dataset/MuSique_Ans_process.py
+!/dataset/MuSique_Full_process.py
 
 /llmragenv/LLM/vllm_bak.py
 /llmragenv/LLM/vllm_batch_run.py
