@@ -8,7 +8,9 @@
 </p>
 <p align="center">Overall architecture of NeutronRAG</p> -->
 
-# EvoRAG: Making KG-based RAG Automatically Evolve through Feedback Backpropagation [\[our paper\]](https://arxiv.org/abs/2604.15676)
+# EvoRAG: Making KG-based RAG Automatically Evolve through Feedback Backpropagation [\[our paper ICDE 2027\]](https://arxiv.org/abs/2604.15676)
+
+**This paper has been accepted by ICDE 2027!**
 
 <p align="center">
   <img src="resource/overview.png" alt="EvoRAG system overview">
