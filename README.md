@@ -108,6 +108,11 @@ Start everything with one command:
 ```bash
 bash run.sh
 ```
+<p align="center">
+  <img src="resource/workflow.png" alt="EvoRAG Workflow Diagram">
+  <br>
+  <b>EvoRAG Workflow Diagram</b>
+</p>
 
 ![EvoRAG Workflow Diagram](resource/workflow.png)
 
