@@ -49,6 +49,13 @@ llm:
   llama:
     url: http://localhost:11434/v1
     key: ollama
+    # url: https://qianfan.baidubce.com/v2
+    # key: bce-v3/ALTAK-lGkipQ7AFP2oP2uq3Z5II/e816c8829f4f6ad0b165fe71bb5283831db2536b
+    # url: aip.baidubce.com
+    # key: OlvUN2cqFVeQDGoB6N36Gh2f
+    # MODEL_NAME: llama2:70b
+    # MODEL_NAME=llama2:70b
+
 
 
 database:

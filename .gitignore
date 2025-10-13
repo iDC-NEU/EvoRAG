@@ -1,9 +1,43 @@
 .vscode
+*.log
+# 忽略所有log文件
+*.json
+temp
+# 忽略所有名称为temp的文件夹
+/config/path-local.yaml
 __pycache__/
-# run.sh
-dataset/multihop
-KGModify/
-kg_modify.py
-test.py
 
+# 1. 忽略 datset/ 目录下的所有内容
+/dataset/*
+# 2. 取消忽略 rgb 目录
+!/dataset/rgb/
+# 3. 在 rgb/ 内部，忽略所有内容
+/dataset/rgb/*
+# 取消忽略rgb数据集
+!/dataset/rgb/en.json
+
+!/dataset/dataset.py
+!/dataset/extract_triples.py
+
+/llmragenv/LLM/vllm_bak.py
+/llmragenv/LLM/vllm_batch_run.py
+/llmragenv/LLM/vllm_batch.py
+
+/logs_bak
+
+# 忽略 logs 下所有内容
+/logs/*
+# 保留这两个子目录
+!/logs/basic_batch/
+!/logs/standard_batch/
+# 但忽略它们下面所有文件
+/logs/basic_batch/**/*      
+/logs/standard_batch/**/*   
+# 再次取消忽略 .gitkeep
+!/logs/basic_batch/**/.gitkeep
+!/logs/standard_batch/**/.gitkeep
+
+test.py
+*.sh
+!run.sh
 

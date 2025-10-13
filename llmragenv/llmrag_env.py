@@ -331,14 +331,14 @@ class LLMRAGEnv(object):
             # graph_db2 = GraphDBFactory(args.graphdb).get_graphdb(space_name=args.space_name)
             if args.llm_fb == "None":
                 print(f"-----------1个模型------------------")
-                KGModify(ChatGraphRAG(self.llm, graph_db), None, args).run()
+                KGModify(ChatGraphRAG(self.llm, graph_db, args), None, args).run()
             else:
                 print(f"-----------2个模型------------------{args.llm_fb}")
                 self.llm_fb = ClientFactory(model_name=args.llm_fb, llmbackend=args.llmbackend).get_client()
                 graph_db_null = GraphDBFactory(args.graphdb).get_graphdb(space_name="api")
                 # print("lalala")
                 # assert(False)
-                KGModify(ChatGraphRAG(self.llm, graph_db), ChatGraphRAG(self.llm_fb, graph_db_null), args).run()
+                KGModify(ChatGraphRAG(self.llm, graph_db, args), ChatGraphRAG(self.llm_fb, graph_db_null, args), args).run()
         except ImportError as e:
             # 如果发生 ImportError，抛出带有详细信息的异常
             print("KGModify is not exit, please ask for author!")

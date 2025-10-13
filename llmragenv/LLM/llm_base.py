@@ -28,6 +28,14 @@ class LLMBase():
     @abstractmethod
     def chat_with_ai(self, prompt: str, history: List[List[str]] | None = None) -> str | None:
         raise NotImplementedError()
+    
+    @abstractmethod
+    def chat_with_ai_with_system(self, prompt_system: str, prompt_user: str, history: List[List[str]] | None = None, enable_thinking = False) -> str | None:
+        raise NotImplementedError()
+    
+    @abstractmethod
+    def chat_with_ai_mulRounds(self, history: list[dict]) -> str:
+        raise NotImplementedError()
 
     @abstractmethod
     def chat_with_ai_stream(self, prompt: str, history: List[List[str]] | None = None):

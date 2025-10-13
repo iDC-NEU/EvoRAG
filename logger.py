@@ -31,7 +31,7 @@ class Logger:
 
         # 如果日志文件存在，则清除其内容
         if os.path.exists(self.log_name):
-            with open(self.log_name, 'w') as f:
+            with open(self.log_name, 'w', encoding='utf-8') as f:
                 f.truncate(0)  # 清空文件内容
 
         self.logger.add(self.log_name
@@ -68,5 +68,5 @@ class Logger:
         self.logger.error(message)
 
     def log(self, message):
-        with open(self.log_name, 'a+') as f:
+        with open(self.log_name, 'a+', encoding='utf-8') as f:
             f.write(message + '\n')

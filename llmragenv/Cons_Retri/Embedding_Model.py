@@ -19,26 +19,18 @@ EMBEDD_DIMS = {
     "text-embedding-ada-002": 1536,
 }
 class EmbeddingEnv:
-    
-    def get_free_device(self):
-        import torch
-        num_gpus = torch.cuda.device_count()
-        free_memory = []
-        
-        for i in range(num_gpus):
-            allocated_memory = torch.cuda.memory_allocated(i)
-            reserved_memory = torch.cuda.memory_reserved(i)
-            total_memory = torch.cuda.get_device_properties(i).total_memory
-            
-            free_memory.append(total_memory - allocated_memory)
-        
-        best_gpu = free_memory.index(max(free_memory))
-        return f"cuda:{best_gpu}"
 
     def __init__(self,
                  embed_name="BAAI/bge-large-en-v1.5",
                  embed_batch_size=20,
-                 device="cuda:0"):
+                 device="cuda:0",
+                 args=None):
+        if args:
+            embed_name = args.model if hasattr(args, 'model') else embed_name
+            embed_batch_size = args.batch_size if hasattr(args, 'batch_size') else embed_batch_size
+            device = args.device if hasattr(args, 'device') else device
+            
+        
         self.embed_name = embed_name
         self.embed_batch_size = embed_batch_size
 
@@ -46,7 +38,9 @@ class EmbeddingEnv:
         self.dim = EMBEDD_DIMS[embed_name]
 
         #device = self.get_free_device()
-        device="cuda:0"
+        # device="cuda:0"
+        
+        print(f"EmbeddingEnv: embed_name {embed_name}, embed_batch_size {embed_batch_size}, dim {self.dim}, device {device}")
 
 
         if 'BAAI' in embed_name:

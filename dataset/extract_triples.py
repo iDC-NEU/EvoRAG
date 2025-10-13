@@ -154,11 +154,15 @@ def extract_json_str(text: str) -> str:
 
 class Extract_model:
     def __init__(self, args):
-        self.llm = ClientFactory(model_name=args.llm, llmbackend=args.llmbackend ).get_client()
+        if args.option == "extract_triplets":
+            self.llm = ClientFactory(model_name=args.llm, llmbackend=args.llmbackend ).get_client()
+        else:
+            self.llm = None
         self.corpus = []
         self.dataset = args.dataset_name
         # self.get_corpus()
         self.triplets = []
+        self.args = args
         
     def get_corpus(self):
         if self.dataset == "concurrentqa":
@@ -291,32 +295,83 @@ class Extract_model:
             loaded_triplets = json.load(f)
             
     def read_triplets(self,):
-        read_path = f"./dataset/logs/{self.dataset}/triplets.json"
-        with open(read_path, "r", encoding="utf-8") as f:
-            count = 0
-            for line_num, line in enumerate(f, 1):
-                # count += 1
-                # if count >=3 :
-                #     break
-                line = line.strip()
-                if not line:
-                    continue
+        if self.dataset == "metaqa":
+            skipped_lines = 0
+            set_file = set()
+            
+            with open(f"./dataset/metaqa/kb.txt", 'r', encoding='utf-8') as f:
+                validate=True
+                for line_num, line in enumerate(f, 1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if line in set_file:
+                        # print(line)
+                        pass
+                    else:
+                        set_file.add(line)
+                    parts = line.split('|')
+                    
+                    
+                    # 数据验证
+                    if validate:
+                        if len(parts) != 3:
+                            print(f"第{line_num}行格式错误，跳过: {line}")
+                            skipped_lines += 1
+                            continue
+                        
+                        # 检查是否有空字段
+                        if any(not part.strip() for part in parts):
+                            print(f"第{line_num}行存在空字段，跳过: {line}")
+                            skipped_lines += 1
+                            continue
+                    
+                    # 处理数据
+                    entity1, relation, entity2 = [part.strip() for part in parts]
+                    self.triplets.append({"head": entity1, "relationship": relation, "tail": entity2})
+                    
+            
+            print(f"成功读取 {len(self.triplets)} 条关系，跳过 {skipped_lines} 行无效数据, 去重后 {len(set_file)} 条")
+            # client = NebulaClient()
+            # db_triplets = client.get_triplets(self.args.dataset_name)
+            # set_db = set()
+            # for item in db_triplets:
+            #     assert len(item) == 3
+            #     triplet_str = "|".join(map(str, item))
+            #     set_db.add(triplet_str)
+            # print(f"set_file: {len(set_file)}，set_db: {len(set_db)}")
+            # difference = set_file - set_db
+            # print(f"{len(difference)}\n{difference}")
                 
-                try:
-                    data = json.loads(line)
-                    # yield (
-                    #     data["head"],
-                    #     data["relationship"],
-                    #     data["tail"]
-                    # )
-                    # print(data)
-                    self.triplets.append(data)
-                except (json.JSONDecodeError, KeyError) as e:
-                    print(f"第{line_num}行数据异常: {str(e)}")
-                    continue
+            # print(self.triplets[0:10])
+            # assert False
+        else:
+            read_path = f"./dataset/logs/{self.dataset}/triplets.json"
+            with open(read_path, "r", encoding="utf-8") as f:
+                count = 0 
+                for line_num, line in enumerate(f, 1):
+                    # count += 1
+                    # if count >=3 :
+                    #     break
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    try:
+                        data = json.loads(line)
+                        # yield (
+                        #     data["head"],
+                        #     data["relationship"],
+                        #     data["tail"]
+                        # )
+                        # print(data)
+                        self.triplets.append(data)
+                    except (json.JSONDecodeError, KeyError) as e:
+                        print(f"第{line_num}行数据异常: {str(e)}")
+                        continue
 
     def read_triplets_rebuild(self,):
-        with open(f"./logs/triplets/{self.dataset}_unchanged_0.json", "r", encoding="utf-8") as file:
+        with open(f"./logs/triplets/{self.dataset}_0.json", "r", encoding="utf-8") as file:
             triplets_score = json.load(file)
 
         for key, value in triplets_score.items():
@@ -410,7 +465,7 @@ if __name__ == "__main__":
     elif args.option == "insert_nebulagraph":
         client = NebulaClient()
         client.create_space(args.dataset_name)
-        build.read_triplets()
+        build.read_triplets()# 
         build.parallel_insert(args.dataset_name)
     elif args.option == "rebuild_nebulagraph":
         client = NebulaClient()
@@ -419,3 +474,6 @@ if __name__ == "__main__":
         build.parallel_insert(args.dataset_name)
     # build.read_triplets()
 
+# python -m dataset.extract_triples --llm llama3:8b --llmbackend llama_index --dataset_name metaqa --option insert_nebulagraph
+
+# python -m dataset.extract_triples --llm llama3:8b --llmbackend llama_index --dataset_name hotpotqa_1 --option rebuild_nebulagraph

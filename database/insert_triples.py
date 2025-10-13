@@ -93,7 +93,8 @@ if __name__ == '__main__':
                         type=str,
                         required=True,
                         help='dataset name.')
-    parser.add_argument("--iteration", type=str, help="number of iteration (e.g., 3, 5 ) ", default='')
+    parser.add_argument("--iteration", type=int, help="number of iteration (e.g., 3, 5 ) ", default=0)
+    parser.add_argument("--threshold", type=int, help="Whether to discard triplets below the minimum threshold", default=0)
     parser.add_argument(
         '--proc',
         type=int,
@@ -108,12 +109,14 @@ if __name__ == '__main__':
     print(args)
 
     #with open(f"../logs/triplets/{args.data}.json", "r", encoding="utf-8") as file:
-    if args.iteration:
-        with open(f"./logs/triplets/{args.db}_unchanged_{args.iteration}.json", "r", encoding="utf-8") as file:
-            triplets_score = json.load(file)
-    else:
-        with open(f"./logs/triplets/{args.db}.json", "r", encoding="utf-8") as file:
-            triplets_score = json.load(file)
+    # if args.iteration:
+    #     with open(f"./logs/triplets/{args.db}_{args.iteration}.json", "r", encoding="utf-8") as file:
+    #         triplets_score = json.load(file)
+    # else:
+    #     with open(f"./logs/triplets/{args.db}.json", "r", encoding="utf-8") as file:
+    #         triplets_score = json.load(file)
+    with open(f"./logs/triplets/{args.db}_{args.iteration}.json", "r", encoding="utf-8") as file:
+        triplets_score = json.load(file)
 
     ###完善代码
     # 初始化 loaded_triplets 列表
@@ -122,10 +125,10 @@ if __name__ == '__main__':
     # 遍历 triplets_score 中的每个项
     for key, value in triplets_score.items():
         # 获取 triplet 字段中的三个短语
-        # if value["score"] > 70:
-        x, y, z = value["triplet"]
-        # 将三元组添加到 loaded_tripletss
-        loaded_triplets.append((str(x), str(y), str(z)))
+        if value["score"] > args.threshold:
+            x, y, z = value["triplet"]
+            # 将三元组添加到 loaded_tripletss
+            loaded_triplets.append((str(x), str(y), str(z)))
 
 
     # loaded_triplets = [(str(x), str(y), str(z)) for x, y, z in loaded_triplets]
@@ -136,9 +139,9 @@ if __name__ == '__main__':
         for x in triplet:
             assert len(x) > 0, triplet
 
-    if args.iteration:
-        print(f'load {len(loaded_triplets)} triplets from ./logs/triplets/{args.db}_unchanged_{args.iteration}.json.')
-    else:
-        print(f'load {len(loaded_triplets)} triplets from ./logs/triplets/{args.db}.json.')
+
+    print(f'load {len(loaded_triplets)} triplets from ./logs/triplets/{args.db}_{args.iteration}.json.')
+
+    # print(f'load {len(loaded_triplets)} triplets from ./logs/triplets/{args.db}.json.')
 
     parallel_insert(loaded_triplets, args.db, args.proc, args.reuse)

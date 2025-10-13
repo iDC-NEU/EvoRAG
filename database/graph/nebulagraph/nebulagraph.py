@@ -6,6 +6,9 @@ from nebula3.Config import Config
 from database.graph.nebulagraph.FormatResp import print_resp
 # from nebula3.common import *
 import os
+# import sys
+# sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from utils.config import path_config
 import json
 import numpy as np
 import time
@@ -254,6 +257,9 @@ class NebulaDB(GraphDatabase):
         self.verbose = verbose
         self.store: NebulaGraphStore = None
 
+        # 1. 获取 algorithm 配置并提升到顶层
+        self.loacl_path = path_config["local_embedding_path"]
+
         try:
             self.store, self.storage_context = self.init_nebula_store()
         except Exception as e:
@@ -265,7 +271,7 @@ class NebulaDB(GraphDatabase):
 
         self.retriever = None
 
-        # self.triplet2id, self.triplet_embeddings = self.generate_embedding()
+        self.triplet2id, self.triplet_embeddings = self.generate_embedding()
         
         # self.entity2id, self.entity_embeddings = self.generate_entity_embedding()
         # self.entities = self.get_all_entities() 
@@ -483,6 +489,7 @@ class NebulaDB(GraphDatabase):
             return []
         return knowledge_sequence
 
+    # +++
     def clean_sequence(self,
                        sequence,
                        name_pattern=r'(?<=\{name: )([^{}]+)(?=\})',
@@ -671,10 +678,12 @@ class NebulaDB(GraphDatabase):
         # print(list(entities)[:10])
         return entities
 
+    # +++
     def generate_embedding(self):
         # file_path = f'/home/hdd/dataset/rag-data/{self.space_name}-triplet-embedding.npz'
         # file_path = f'/home/hdd/dataset/rag-data/rgb-triplet-embedding.npz'
-        file_path = f'/home/hdd/zhangyz/rag-data/{self.space_name}-triplet-embedding.npz'
+        # file_path = f'/home/hdd/zhangyz/rag-data/{self.space_name}-triplet-embedding-standard.npz'
+        file_path = f'{self.loacl_path}/{self.space_name}-triplet-embedding-standard.npz'
 
         if file_exist(file_path):
             print(f"load embedding from {file_path}")
@@ -688,7 +697,8 @@ class NebulaDB(GraphDatabase):
         triplet2id = {}
         all_triplets_str = []
         for i, triplet in enumerate(all_triplets):
-            triplet_str = ' '.join(triplet)
+            # triplet_str = ' '.join(triplet)
+            triplet_str = f"{triplet[0]} {triplet[1].replace('_', ' ')} {triplet[2]}"
             triplet2id[triplet_str] = i
             all_triplets_str.append(triplet_str)
 
@@ -721,55 +731,53 @@ class NebulaDB(GraphDatabase):
             f'triplet embeddings ({all_embeddings_np.shape}) saved to {file_path}'
         )
         return triplet2id, all_embeddings_np
+    
+    # +++
+    def generate_path_embeddings_with_cache(self, paths):
 
-    # def generate_entity_embedding(self):
-    #     file_path = f'/home/hdd/zhangyz/rag-data/{self.space_name}-entity-embedding.npz'
-    #     # file_path = f'/home/hdd/zhangyz/rag-data/rgb-entity-embedding.npz'
+        # cache_path = f'/home/hdd/zhangyz/rag-data/{self.space_name}-path-cache-embedding-standard.npz'
+        cache_path = f'{self.loacl_path}/{self.space_name}-path-cache-embedding-standard.npz'
 
-    #     if file_exist(file_path):
-    #         print(f"load embedding from {file_path}")
-    #         loaded_data = np.load(file_path, allow_pickle=True)
-    #         entity2id = loaded_data['entity2id'].item()
-    #         entity_embeddings = loaded_data['entity_embeddings']
+        if os.path.exists(cache_path):
+            print(f"加载已有缓存: {cache_path}")
+            data = np.load(cache_path, allow_pickle=True)
+            path2id = data["path2id"].item()
+            embeddings = data["embeddings"].tolist()  # 转回 list，方便 append
+        else:
+            print(f"未找到缓存，创建新的缓存文件: {cache_path}")
+            path2id = {}
+            embeddings = []
 
-    #         return entity2id, entity_embeddings
+        # --- 找出还未计算 embedding 的新路径 ---
+        cached_paths = set(path2id.keys())
+        new_paths = [p for p in paths if p not in cached_paths]
 
-    #     all_entities = self.get_all_entities()
-    #     # all_entities_list = [' '.join(entity) for entity in sorted(all_entities)]
-    #     entity2id = {}
-    #     all_entities_str = []
-    #     for i, entity in enumerate(sorted(all_entities)):
-    #         # entity_str = ' '.join(entity)
-    #         entity_str = str(entity)
-    #         entity2id[entity_str] = i
-    #         all_entities_str.append(entity_str)
+        if not new_paths:
+            print("所有路径已存在于缓存中，无需计算新嵌入。")
+            return path2id, np.array(embeddings, dtype=float)
 
-    #     # embed_model = EmbeddingEnv(embed_name="BAAI/bge-large-en-v1.5",
-    #     #                            embed_batch_size=10)
-    #     embed_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2') # device = "cuda:2"
+        print(f"新路径数量: {len(new_paths)} / 总数: {len(paths)}")
 
-    #     all_embeddings = []
-    #     import torch
-    #     step = 10
-    #     n_entities = len(all_entities_str)
-    #     for start in range(0, n_entities, step):
-    #         input_texts = all_entities_str[start:min(start + step, n_entities)]
-    #         # embeddings = embed_model.get_embeddings(input_texts)
-    #         with torch.no_grad(): 
-    #             embeddings = embed_model.encode(input_texts, convert_to_numpy=True)
-    #         torch.cuda.empty_cache()
-    #         all_embeddings.extend(embeddings)
+        # --- 批量生成新路径的 embedding ---
+        # for start in tqdm(range(0, len(new_paths), batch_size), desc="Embedding new paths"):
+        batch_size = 10
+        embed_model = EmbeddingEnv(embed_name="BAAI/bge-large-en-v1.5", embed_batch_size=batch_size)
+        for start in range(0, len(new_paths), batch_size):
+            batch = new_paths[start:start + batch_size]
+            batch_embeddings = embed_model.get_embeddings(batch)
 
-    #     all_embeddings_np = np.array(all_embeddings, dtype=float)
+            for path, emb in zip(batch, batch_embeddings):
+                new_id = len(embeddings)
+                path2id[path] = new_id
+                embeddings.append(emb)
 
-    #     np.savez(file_path,
-    #              entity2id=entity2id,
-    #              entity_embeddings=all_embeddings_np)
+        # --- 保存更新后的缓存 ---
+        embeddings_np = np.array(embeddings, dtype=float)
+        np.savez(cache_path, path2id=path2id, embeddings=embeddings_np)
+        print(f"缓存已更新，共 {len(embeddings_np)} 条嵌入保存至 {cache_path}")
 
-    #     print(
-    #         f'entity embeddings ({all_embeddings_np.shape}) saved to {file_path}'
-    #     )
-    #     return entity2id, all_embeddings_np
+        return path2id, embeddings_np
+
     
     def remove_entities(self, delete_entities_list):
         new_entity2id = {}
@@ -815,7 +823,8 @@ class NebulaDB(GraphDatabase):
         print(f'Updated entity embeddings ({self.entity_embeddings.shape}) saved to {file_path}')
     
     def generate_new_entity_embedding_standard(self, entities_new):
-        file_path = f'/home/hdd/zhangyz/rag-data/{self.space_name}-entity-embedding-standard.npz'
+        # file_path = f'/home/hdd/zhangyz/rag-data/{self.space_name}-entity-embedding-standard.npz'
+        file_path = f'{self.loacl_path}/{self.space_name}-entity-embedding-standard.npz'
 
         entities_new_np = np.array(entities_new, dtype=str)
         indices = np.searchsorted(self.entities, entities_new_np)
@@ -826,7 +835,8 @@ class NebulaDB(GraphDatabase):
     
     def generate_entity_embedding_standard(self):
         # 定义文件路径
-        file_path = f'/home/hdd/zhangyz/rag-data/{self.space_name}-entity-embedding-standard.npz'
+        # file_path = f'/home/hdd/zhangyz/rag-data/{self.space_name}-entity-embedding-standard.npz'
+        file_path = f'{self.loacl_path}/{self.space_name}-entity-embedding-standard.npz'
         
         # 如果文件存在，则加载嵌入和实体列表
         if file_exist(file_path):
@@ -1280,46 +1290,39 @@ class NebulaDB(GraphDatabase):
             keep_id_list.append([id.strip() for id in ids.strip().split(",")])
         return keep_id_list, len(relationship_list)
 
-    def process_redundant_relationship(self, response_for_redundant_relationship, redundant_relationship, TF):
-        keep_relationship, group_num = self.parse_keep_relationship(response_for_redundant_relationship)
-        if group_num != len(redundant_relationship):
-            return "For the processing of redundant relations, if the number of answer groups is different from the question array, skip the processing"
-        redundant_relationship_list = [item for sublist in redundant_relationship for item in sublist]
-        keep_relationship_list = [item for sublist in keep_relationship for item in sublist]
-        log_keep = ""
-        delele_list = []
-        for idx, relationship in enumerate(redundant_relationship_list, start= 1): # 是否要捕捉错误？？？
-            triple_item = self.split_into_hops_for_redundant_relationship(relationship)[0]
-            if str(idx) in keep_relationship_list:
-                log_keep = log_keep + '\n' + triple_item[3]
-            else:
-                if TF:
-                    self.delete(triple_item[0], triple_item[2], triple_item[1])
-                delele_list.append(triple_item[3])
-                pass
-        return log_keep, delele_list
+    # def process_redundant_relationship(self, response_for_redundant_relationship, redundant_relationship, TF):
+    #     keep_relationship, group_num = self.parse_keep_relationship(response_for_redundant_relationship)
+    #     if group_num != len(redundant_relationship):
+    #         return "For the processing of redundant relations, if the number of answer groups is different from the question array, skip the processing"
+    #     redundant_relationship_list = [item for sublist in redundant_relationship for item in sublist]
+    #     keep_relationship_list = [item for sublist in keep_relationship for item in sublist]
+    #     log_keep = ""
+    #     delele_list = []
+    #     for idx, relationship in enumerate(redundant_relationship_list, start= 1): # 是否要捕捉错误？？？
+    #         triple_item = self.split_into_hops_for_redundant_relationship(relationship)[0]
+    #         if str(idx) in keep_relationship_list:
+    #             log_keep = log_keep + '\n' + triple_item[3]
+    #         else:
+    #             if TF:
+    #                 self.delete(triple_item[0], triple_item[2], triple_item[1])
+    #             delele_list.append(triple_item[3])
+    #             pass
+    #     return log_keep, delele_list
     
-    def process_redundant_relationship_v2(self, parsed_response_for_relationship, redundant_relationship_3d, TF):
+    def process_redundant_relationship(self, parsed_response_for_relationship, redundant_relationship_3d, TF):
         redundant_relationship_list = [item for sublist in redundant_relationship_3d for item in sublist]
         keep_id_list = [item for sublist in parsed_response_for_relationship for item in sublist]
-        # keep_id_list = []
-        # for sublist in parsed_response_for_relationship:
-        #     if len(sublist) > 1:
-        #         keep_id_list.extend(sublist[1:])
-        # print(f"process_redundant_relationship_v2 111")
-        keep_str = ""
+        keep_list = []
         delele_list = []
-        for idx, triple in enumerate(redundant_relationship_list, start= 0): # 是否要捕捉错误？？？
+        for idx, triple in enumerate(redundant_relationship_list, start= 0):
             if idx in keep_id_list:
-                keep_str = keep_str + '\n' + str(triple)
+                keep_list.append(triple)
+                # keep_str = keep_str + '\n' + str(triple)
             else:
                 if TF:
-                    # print(f"process_redundant_relationship_v2 222")
-                    # print(f"{triple[0]}, {triple[1]}, {triple[2]}")
                     self.delete(triple[0], triple[1], triple[2])
                 delele_list.append(triple)
-                # pass
-        return keep_str, delele_list
+        return keep_list, delele_list
     
     def process_redundant_entity(self, parsed_response_for_entity, redundant_entity_2d, TF):
         redundant_entity_list = [item for sublist in redundant_entity_2d for item in sublist]
