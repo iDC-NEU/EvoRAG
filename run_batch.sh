@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Paper-standard, full feedback loop. Override any value at invocation time,
+# leaderboardStrategy full feedback loop. Override any value at invocation time,
 # for example: LLM=Qwen2.5-32B-Instruct END=3 bash run_batch.sh
 DB="${DB:-rgb_zyz}"
 DATA="${DATA:-rgb}"
 PROC="${PROC:-1}"
 START="${START:-0}"
 END="${END:-7}"
-ALGORITHM="${ALGORITHM:-standard_batch}"
+ALGORITHM="${ALGORITHM:-leaderboardStrategy}"
 LLM="${LLM:-Qwen2.5-7B-Instruct}"
 LLMBACKEND="${LLMBACKEND:-vllm}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
-if [[ "$ALGORITHM" != "standard_batch" ]]; then
-    echo "run_batch.sh reproduces the paper-standard PyTorch update; set ALGORITHM=standard_batch." >&2
+if [[ "$ALGORITHM" != "leaderboardStrategy" ]]; then
+    echo "run_batch.sh requires ALGORITHM=leaderboardStrategy." >&2
     exit 2
 fi
 
 mkdir -p "logs/${ALGORITHM}/output"
 
 for ((i = START; i < END; i++)); do
-    echo "Running paper-standard iteration ${i}..."
+    echo "Running leaderboardStrategy iteration ${i}..."
     "$PYTHON_BIN" -m database.insert_triples \
         --db "$DB" --data "$DATA" --algorithm "$ALGORITHM" \
         --proc "$PROC" --iteration "$i"
