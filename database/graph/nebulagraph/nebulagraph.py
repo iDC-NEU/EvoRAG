@@ -281,36 +281,36 @@ class NebulaDB(GraphDatabase):
         self.entities, self.entity_embeddings = self.generate_entity_embedding_standard()
         
 
-        # 路径缓存
-        self.index_path = f"{self.local_path}/{space_name}-path2id.json"
-        self.emb_path = f"{self.local_path}/{space_name}-embeddings.npy"
+        # 路径缓存 比不缓存都慢，弃用
+        # self.index_path = f"{self.local_path}/{space_name}-path2id.json"
+        # self.emb_path = f"{self.local_path}/{space_name}-embeddings.npy"
 
-        self.dim = algorithm_config['embedding']['dim']
-        self.batch_size = algorithm_config['embedding']['batch_size']
-        self.flush_interval = 1000
-        # self.embed_model = EmbeddingEnv(embed_name="BAAI/bge-large-en-v1.5", embed_batch_size=batch_size)
+        # self.dim = algorithm_config['embedding']['dim']
+        # self.batch_size = algorithm_config['embedding']['batch_size']
+        # self.flush_interval = 1000
+        # # self.embed_model = EmbeddingEnv(embed_name="BAAI/bge-large-en-v1.5", embed_batch_size=batch_size)
 
-        # --- 加载索引 ---
-        if os.path.exists(self.index_path):
-            print(f"加载已有缓存索引: {self.index_path}")
-            with open(self.index_path, "r", encoding="utf-8") as f:
-                self.path2id = json.load(f)
-        else:
-            print(f"未找到缓存索引，创建新的索引文件: {self.index_path}")
-            self.path2id = {}
+        # # --- 加载索引 ---
+        # if os.path.exists(self.index_path):
+        #     print(f"加载已有缓存索引: {self.index_path}")
+        #     with open(self.index_path, "r", encoding="utf-8") as f:
+        #         self.path2id = json.load(f)
+        # else:
+        #     print(f"未找到缓存索引，创建新的索引文件: {self.index_path}")
+        #     self.path2id = {}
 
-        # --- 内存映射嵌入文件 ---
-        self.embeddings = None
-        if os.path.exists(self.emb_path):
-            existing_size = len(self.path2id)
-            print(f"检测到已有嵌入文件，共 {existing_size} 条。")
-            self.embeddings = np.memmap(
-                self.emb_path, dtype=np.float32, mode="r+", shape=(existing_size, self.dim)
-            )
+        # # --- 内存映射嵌入文件 ---
+        # self.embeddings = None
+        # if os.path.exists(self.emb_path):
+        #     existing_size = len(self.path2id)
+        #     print(f"检测到已有嵌入文件，共 {existing_size} 条。")
+        #     self.embeddings = np.memmap(
+        #         self.emb_path, dtype=np.float32, mode="r+", shape=(existing_size, self.dim)
+        #     )
 
-        # --- 临时缓存新嵌入 ---
-        self.new_embeddings = []
-        self.new_paths = []
+        # # --- 临时缓存新嵌入 ---
+        # self.new_embeddings = []
+        # self.new_paths = []
 
     def __del__(self):
         del self.client
