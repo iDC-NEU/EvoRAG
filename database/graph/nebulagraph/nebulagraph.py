@@ -239,7 +239,8 @@ class NebulaDB(GraphDatabase):
                  space_name = "rgb",
                 #  log_file='./database/nebula.log',
                  create=False,
-                 verbose=False):
+                 verbose=False,
+                 init=False):
         #  verbose=False, retriever=False, llm_env=None):
         # self.log_file = log_file
         # self.server_ip = server_ip
@@ -272,13 +273,14 @@ class NebulaDB(GraphDatabase):
 
         self.retriever = None
 
-        self.triplet2id, self.triplet_embeddings = self.generate_embedding()
-        
-        # self.entity2id, self.entity_embeddings = self.generate_entity_embedding()
-        # self.entities = self.get_all_entities() 
-        
-        # Do not use get_all_dentities to obtain entities, as the modified entities are out of order
-        self.entities, self.entity_embeddings = self.generate_entity_embedding_standard()
+        if not init:
+            self.triplet2id, self.triplet_embeddings = self.generate_embedding()
+            
+            # self.entity2id, self.entity_embeddings = self.generate_entity_embedding()
+            # self.entities = self.get_all_entities() 
+            
+            # Do not use get_all_dentities to obtain entities, as the modified entities are out of order
+            self.entities, self.entity_embeddings = self.generate_entity_embedding_standard()
         
 
         # 路径缓存 比不缓存都慢，弃用

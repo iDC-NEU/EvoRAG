@@ -4120,9 +4120,11 @@ class ChatGraphRAG(ChatBase):
         prompt_system_batch = []
         prompt_user_batch = []
         for i in range(len(query)):
-            prompt_system = shared_prefix.format(knowledge_sequences = context_batch[i])
-            # prompt_user = score_feedback_prompt_standard_user_shared_prefix.format(question = query[i], last_response = response[i])
-            prompt_user = score_feedback_prompt_leaderboardStrategy_user_shared_prefix.format(question = query[i], last_response = response[i], flag_TF = "Correct" if TF_list[i] else "Incorrect")
+            # prompt_system = shared_prefix.format(knowledge_sequences = context_batch[i])
+            # prompt_user = score_feedback_prompt_leaderboardStrategy_user_shared_prefix.format(question = query[i], last_response = response[i], flag_TF = "Correct" if TF_list[i] else "Incorrect")
+            prompt_system = score_feedback_prompt_baisc_system
+            prompt_user = score_feedback_prompt_baisc_user.format(question = query[i], last_response = response[i], flag_TF = "Correct" if TF_list[i] else "Incorrect", knowledge_sequences = context_batch[i])
+            
             prompt_system_batch.append(prompt_system)
             prompt_user_batch.append(prompt_user)
             # print(f"-----prompt----\n{prompt_system}\n{prompt_user}")
