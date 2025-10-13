@@ -168,6 +168,7 @@ evolve_shared_prefix:
   feedback_process: "standard_for_path_shared_prefix" # 对路径评分
   top_k_per_entity: true 
   lr : 0.5
+  loss_epsilon: 1.0e-12
   
 
 standard_batch: # 标准方法
@@ -181,6 +182,7 @@ standard_batch: # 标准方法
   feedback_process: "standard_for_path_shared_prefix" # 对路径评分
   top_k_per_entity: true 
   lr : 0.5
+  loss_epsilon: 1.0e-12
   
 
 basic_batch: # 基础方法, 优化的  使用中！

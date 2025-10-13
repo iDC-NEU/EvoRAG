@@ -4664,19 +4664,34 @@ class KGModify:
         if feedback_noise:
             flag_TF = not flag_TF
         utility_sign = 1.0 if flag_TF else -1.0
-        epsilon = torch.finfo(torch.float64).eps
-        utilities = torch.tensor(
-            [
-                utility_sign * 0.4 * float(response_dict["Path_score"].get(f"Path {path_id}", 0.0))
-                for path_id in range(len(path_keys))
-            ],
-            dtype=torch.float64,
+        raw_utilities = []
+        for path_id in range(len(path_keys)):
+            path_score = float(response_dict["Path_score"].get(f"Path {path_id}", 0.0))
+            if not np.isfinite(path_score):
+                self.logger.log(
+                    f"Skip standard update: Path {path_id} has a non-finite utility."
+                )
+                return
+            raw_utilities.append(utility_sign * 0.4 * path_score)
+        utilities = torch.tensor(raw_utilities, dtype=torch.float64)
+        loss_epsilon = float(getattr(args_param, "loss_epsilon", 1e-12))
+        if not 0.0 < loss_epsilon < 0.5:
+            raise ValueError("loss_epsilon must be in (0, 0.5)")
+
+        # Formula (4) takes log(E[(U + 1) / 2]). Clamp its probability-like
+        # utility weights, not the loss itself, so log(0) is impossible while a
+        # genuine zero loss at E[U] == 1 remains an unchanged optimum.
+        utility_weights = torch.clamp(
+            (utilities + 1.0) / 2.0, min=loss_epsilon, max=1.0
         )
-        # Keep E[U] strictly inside (0, 1). The epsilon belongs on the
-        # probability/utility boundary, not as a replacement for a zero loss.
-        utilities = torch.clamp(utilities, -1.0 + epsilon, 1.0 - epsilon)
-        expected_utility = torch.sum(path_probs * (utilities + 1.0) / 2.0)
+        expected_utility = torch.sum(path_probs * utility_weights)
+        if not torch.isfinite(expected_utility) or expected_utility.item() <= 0.0:
+            self.logger.log("Skip standard update: expected utility is non-finite or non-positive.")
+            return
         loss = -torch.log(expected_utility)
+        if not torch.isfinite(loss):
+            self.logger.log("Skip standard update: loss is non-finite.")
+            return
 
         optimizer = torch.optim.SGD([contribution_scores, alpha], lr=float(args_param.lr))
         optimizer.zero_grad()
@@ -4705,6 +4720,8 @@ class KGModify:
             f"standard autograd loss: {loss.item():.8f}, expected utility: {expected_utility.item():.8f}, "
             f"alpha: {old_alpha:.8f} -> {args_param.score_weight:.8f}"
         )
+        if loss.item() == 0.0:
+            self.logger.log("Standard loss is zero: expected utility reached one; no gradient update is needed.")
     # 冗余处理
     def redundant_process(self, method, filtered_triple_3d, index):
         redundancy_start_time = time.perf_counter()
