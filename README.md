@@ -132,10 +132,35 @@ The startup script can also override additional parameters such as the specific 
 
 
 ## 💄 Run  
-Start everything with one command:  
+1. Start everything with one command:  
 ```bash
 bash run_batch.sh
 ```
+
+2. Feedback with Noise
+```bash
+bash run_noise.sh
+```
+
+This script runs the feedback phase with controlled noise injection, used to test the robustness of the feedback mechanism.
+Noise can simulate uncertain or ambiguous user evaluations, helping assess the model’s stability and adaptive capability.
+
+3. Entity Count Variation in Retrieval
+```bash
+bash run_case_entity.sh
+```
+
+This script experiments with different numbers of retrieved entities during the graph retrieval process.
+It helps evaluate how retrieval breadth (i.e., entity expansion) affects final RAG performance and reasoning quality.
+
+4. Edge Count Variation in Retrieval (Pruning Analysis)
+```bash
+bash run_case_pruning.sh
+```
+
+This script tests edge-level pruning strategies by varying the number of graph edges used during retrieval.
+It can be used to analyze how relational sparsity or pruning thresholds influence semantic path selection and final results.
+
 <p align="center">
   <img src="resource/workflow.png" alt="EvoRAG Workflow Diagram">
   <br>

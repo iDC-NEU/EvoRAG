@@ -4032,7 +4032,7 @@ class ChatGraphRAG(ChatBase):
                 # output, prompt_len, generate_len, end2end_time, generate_time, prefill_time, decode_time, wait_scheduled_time = self._llm.chat_with_ai_with_system(prompt_system, prompt_user)
                 for i in range(len(response_batch)):
                     try:
-                        res_parsed = json.loads(response_batch[i])
+                        res_parsed = json.loads(response_batch[i].strip("`\n "))
                         insufficient = res_parsed.get("Insufficient_information")
                         path_score = res_parsed.get("Path_score")
 
@@ -4067,7 +4067,8 @@ class ChatGraphRAG(ChatBase):
         prompt_user_batch = []
         for i in range(len(query)):
             prompt_system = shared_prefix.format(knowledge_sequences = context_batch[i])
-            prompt_user = score_feedback_prompt_standard_user_shared_prefix.format(question = query[i], last_response = response[i]) # flag_TF = flag_str
+            # prompt_user = score_feedback_prompt_standard_user_shared_prefix.format(question = query[i], last_response = response[i])
+            prompt_user = score_feedback_prompt_standard_user_shared_prefix_optimized.format(question = query[i], last_response = response[i])
             prompt_system_batch.append(prompt_system)
             prompt_user_batch.append(prompt_user)
             # print(f"-----prompt----\n{prompt_system}\n{prompt_user}")
@@ -4084,7 +4085,8 @@ class ChatGraphRAG(ChatBase):
                 # output, prompt_len, generate_len, end2end_time, generate_time, prefill_time, decode_time, wait_scheduled_time = self._llm.chat_with_ai_with_system(prompt_system, prompt_user)
                 for i in range(len(response_batch)):
                     try:
-                        res_parsed = json.loads(response_batch[i])
+
+                        res_parsed = json.loads(response_batch[i].strip("`\n "))
                         insufficient = res_parsed.get("Insufficient_information")
                         path_score = res_parsed.get("Path_score")
 

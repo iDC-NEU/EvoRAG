@@ -64,7 +64,7 @@ if __name__ == "__main__":
     parser.add_argument("--hop", type=int, help="Number of entities retrieved per question", default=2)
     parser.add_argument("--similar", type=bool, help="Number of entities retrieved per question", default=False)
     parser.add_argument("--rate", type=float, help="feedback noise rate", default=0.0)
-    parser.add_argument("--case_rate", type=float, help="feedback noise rate", default=0.05)
+    # parser.add_argument("--case_rate", type=float, help="feedback noise rate", default=0.05)
 
     
     args = parser.parse_args()

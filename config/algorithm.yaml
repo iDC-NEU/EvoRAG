@@ -82,7 +82,7 @@ embedding: # 使用的嵌入模型
   name: "huggingface"
   model: "BAAI/bge-large-en-v1.5"
   # device: "cuda:1"
-  device: "cuda:2"
+  device: "cuda:1"
   batch_size: 20 # 批处理大小
 
 

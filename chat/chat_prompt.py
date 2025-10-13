@@ -82,6 +82,73 @@ Quickly identify and score a **maximum of 6** key supporting or contradicting pa
 **Output**:
 '''
 
+score_feedback_prompt_standard_user_shared_prefix_optimized = '''
+### Task: Score Key Evidence Paths (Max 6)
+
+You are an efficient Evidence Triage Agent. Your task is to swiftly identify and score a **maximum of 6** of the most relevant knowledge paths related to the **Question** and the **Knowledge-derived Answer**. Your primary goal is speed. **Only evaluate paths that are directly relevant (score 2, 1, or -2). Do not feel compelled to score 6 paths if fewer are truly relevant.**
+
+Your output must be a **single, valid JSON object** and nothing else.
+
+### Scoring Guide
+
+Your evaluation must be **exceptionally strict regarding numerical values, dates, quantities, and statistics**. These must match the `Knowledge-derived Answer` *exactly*.
+For non-numerical facts (like names or relationships), focus on direct logical support.
+
+Assign a score **only to the most critical paths**. Ignore all others.
+
+* **2 (Crucial Support)**: The path provides direct, critical evidence that confirms the `Knowledge-derived Answer`.
+    * **For numerical/date/quantity answers**: This path must contain the ***exact, literal*** number, date, or quantity mentioned in the answer. (e.g., `936,172` matches `936,172`).
+    * **For entity/concept answers**: This path directly states the core fact (e.g., "LSU won") or provides an unambiguous logical equivalent (e.g., "Evo holds 100% stock" is crucial support for "Evo acquired").
+
+* **1 (Helpful Context)**: The path offers a necessary logical step or important background to understand the answer, but isn't the single piece of crucial evidence.
+
+* **-2 (Direct Contradiction)**: The path states a fact that directly and unambiguously contradicts the `Knowledge-derived Answer` (e.g., states a *different* exact number, or a different company/person).
+
+**CRUCIAL RULE FOR NUMBERS**: If the answer is or contains a specific number (e.g., `936,172`), paths with *approximate* or *different* numbers (e.g., `936,000` or `930,000`) are **not** relevant support and must **not** be scored (neither positive nor negative). Only paths with the ***exact*** number are eligible for scoring.
+
+### Output Format (Strictly Required)
+
+Provide a JSON object. The `Path_score` dictionary must contain **a maximum of 6 entries**. It should only include paths that you have actively scored (i.e., those truly relevant to the answer).
+
+{{
+  "Insufficient_information": boolean, // True if no path provides meaningful support (score 1 or 2) for the answer.
+  "Path_score": {{              // Key: Path ID, Value: integer (2, 1, or -2). At most 6 entries. Only include truly relevant paths.
+    "Path X": integer
+  }}
+}}
+
+### Example
+
+**Input**:
+Question: Who is on trial for fraud related to FTX?
+Retrieved Knowledge Paths:
+  - Path 1: (FTX) -[founded by]-> (Sam Bankman-Fried)
+  - Path 2: (Sam Bankman-Fried) -[accused of]-> (Orchestrating financial fraud)
+  - Path 3: (FTX) -[sponsored]-> (Mercedes-AMG Petronas F1 Team)
+  - Path 4: (John Ray III) -[took over as CEO of]-> (FTX)
+Knowledge-derived Answer: Sam Bankman-Fried
+
+**Output**:
+
+{{
+  "Insufficient_information": false,
+  "Path_score": {{
+    "Path 1": 1,
+    "Path 2": 2
+  }}
+}}
+
+---
+
+### Input for Scoring
+
+**Question**: {question}
+**Knowledge-derived Answer**: {last_response}
+
+Quickly identify and score a **maximum of 6** key supporting or contradicting paths. Only score paths that are genuinely relevant. Ensure your output is a single, valid JSON object.
+**Output**:
+'''
+
 score_feedback_prompt_standard_user_shared_prefix_bak = '''
 ### Task: Identify Key Evidence Paths
 
