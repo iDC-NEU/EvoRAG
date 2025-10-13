@@ -24,21 +24,21 @@ __pycache__/
 /llmragenv/LLM/vllm_batch.py
 
 /logs_bak
-/logs/*
-!/logs/.gitkeep
-
-
-# # 忽略 logs 下所有内容
 # /logs/*
-# # 保留这两个子目录
-# !/logs/basic_batch/
-# !/logs/standard_batch/
-# # 但忽略它们下面所有文件
-# /logs/basic_batch/**/*      
-# /logs/standard_batch/**/*   
-# # 再次取消忽略 .gitkeep
-# !/logs/basic_batch/**/.gitkeep
-# !/logs/standard_batch/**/.gitkeep
+# !/logs/.gitkeep
+
+
+# 忽略 logs 下所有内容
+/logs/*
+# 保留这两个子目录
+!/logs/basic_batch/
+!/logs/standard_batch/
+# 但忽略它们下面所有文件
+/logs/basic_batch/**/*      
+/logs/standard_batch/**/*   
+# 再次取消忽略 .gitkeep
+!/logs/basic_batch/**/.gitkeep
+!/logs/standard_batch/**/.gitkeep
 
 
 test.py
