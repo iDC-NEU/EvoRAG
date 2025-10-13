@@ -1,6 +1,7 @@
 import os
 # os.environ["CUDA_VISIBLE_DEVICES"] = "0, 1"  # 必须在导入 torch 或 vllm 之前设置！
 import argparse
+import copy
 
 
 from config.config import Config
@@ -48,6 +49,12 @@ if __name__ == "__main__":
     parser.add_argument("--graphdb", type=str, help="graph database baskend (e.g., neo4j, ) ", default='nebulagraph')
     parser.add_argument("--space_name", type=str, help="graph database space name (e.g., rgb, ) ", default='rgb')
     parser.add_argument("--option", type=str, help="execution way (e.g., without_rag, graph_rag ) ", default='graph_rag')
+    parser.add_argument(
+        "--algorithm",
+        type=str,
+        default=None,
+        help="algorithm profile from config/algorithm.yaml; overrides its default algorithm",
+    )
     parser.add_argument("--llmbackend", type=str, help="openai or llama_index", default="openai")
     parser.add_argument("--iteration", type=int, help="number of iteration (e.g., 3, 5 ) ", default=0)
     parser.add_argument("--type", type=str, help="data of iteration changed or unchanged (e.g., changed, unchanged ) ", default='unchanged')
@@ -83,20 +90,27 @@ if __name__ == "__main__":
 
     
     args = parser.parse_args()
+    # Select the profile before applying command-line overrides.  The old order
+    # always kept the YAML default profile, even when a launcher named another
+    # algorithm in its output path.
+    runtime_config = copy.deepcopy(algorithm_config)
+    algorithm_name = args.algorithm or runtime_config["algorithm"]
+    nested_config = runtime_config.get(algorithm_name)
+    if not isinstance(nested_config, dict):
+        parser.error(f"unknown algorithm profile: {algorithm_name}")
+    runtime_config.update(nested_config)
+    runtime_config["algorithm"] = algorithm_name
+
+    # Keep the selected profile when --algorithm was omitted; all other CLI
+    # values retain the existing command-line-overrides-config behaviour.
+    cli_config = vars(args).copy()
+    cli_config.pop("algorithm")
+    runtime_config.update(cli_config)
+
+    # Support dot access throughout the existing pipeline.
+    data = Box(runtime_config)
     print(args)
-    print(algorithm_config)
-
-
-    # 1. 获取 algorithm 配置并提升到顶层
-    algorithm_name = algorithm_config["algorithm"]
-    nested_config = algorithm_config.get(algorithm_name, {})
-    algorithm_config.update(nested_config)  # 把算法配置提升
-
-    # 2. 把命令行参数更新到 config，实现覆盖
-    algorithm_config.update(vars(args))
-
-    # 3. 转成 Box 对象（支持点访问）
-    data = Box(algorithm_config)
+    print(data)
 
     # 特殊参数
     if data.feedback_off:
@@ -108,7 +122,6 @@ if __name__ == "__main__":
         data.algorithm = "leaderboardStrategy_abaltion"
 
         
-    print(data)
     # assert False
 
     # # 定义路径

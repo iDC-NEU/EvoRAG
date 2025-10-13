@@ -1,30 +1,35 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-# 设置参数
-# ps -u zhangyz -o pid,lstart,%cpu,%mem,etime,time,cmd
+# Paper-standard, full feedback loop. Override any value at invocation time,
+# for example: LLM=Qwen2.5-32B-Instruct END=3 bash run_batch.sh
+DB="${DB:-rgb_zyz}"
+DATA="${DATA:-rgb}"
+PROC="${PROC:-1}"
+START="${START:-0}"
+END="${END:-7}"
+ALGORITHM="${ALGORITHM:-standard_batch}"
+LLM="${LLM:-Qwen2.5-7B-Instruct}"
+LLMBACKEND="${LLMBACKEND:-vllm}"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 
-DB="rgb_zyz" # nebulagraph数据库图空间名称
-DATA="rgb" # 数据集名称
-PROC=1
-START=0 # 起始 iteration
-END=7 # 最后一个 iteration（不包含这个数）
-# ALGORITHM="standard_batch"
-# ALGORITHM="basic_batch"
-ALGORITHM="leaderboardStrategy"
-# LLM="Llama-3.1-8B-Instruct" # 问答与反馈大模型名称
-LLM="Qwen2.5-7B-Instruct"
-# LLM="Llama-3-8B-Instruct"
-# LLM="llama3.1:8b-instruct-fp16"
-LLMBACKEND="vllm"
-# LLMBACKEND="llama_index"
+if [[ "$ALGORITHM" != "standard_batch" ]]; then
+    echo "run_batch.sh reproduces the paper-standard PyTorch update; set ALGORITHM=standard_batch." >&2
+    exit 2
+fi
 
-# 遍历 iteration
-for ((i=START; i<END; i++)); do
-    echo "Running iteration $i..."
-    python -m database.insert_triples --db "$DB" --data "$DATA" --algorithm "$ALGORITHM" --proc "$PROC" --iteration "$i"
+mkdir -p "logs/${ALGORITHM}/output"
 
-    python kg_modify.py --dataset_name "$DATA" --llm "$LLM" --graphdb nebulagraph --space_name "$DB" --option evolve_batch --llmbackend "$LLMBACKEND" --iteration "$i" > ./logs/${ALGORITHM}/output/${LLMBACKEND}_${DATA}_evolve_batch_${LLM}_${ALGORITHM}_${i}.log 2>&1
+for ((i = START; i < END; i++)); do
+    echo "Running paper-standard iteration ${i}..."
+    "$PYTHON_BIN" -m database.insert_triples \
+        --db "$DB" --data "$DATA" --algorithm "$ALGORITHM" \
+        --proc "$PROC" --iteration "$i"
 
+    "$PYTHON_BIN" kg_modify.py \
+        --dataset_name "$DATA" --llm "$LLM" \
+        --graphdb nebulagraph --space_name "$DB" \
+        --option evolve_batch --algorithm "$ALGORITHM" \
+        --llmbackend "$LLMBACKEND" --iteration "$i" \
+        > "logs/${ALGORITHM}/output/${LLMBACKEND}_${DATA}_evolve_batch_${LLM}_${ALGORITHM}_${i}.log" 2>&1
 done
-
-# nohup bash run_batch.sh > ./logs/bash_run_btach.log 2>&1

@@ -171,7 +171,7 @@ evolve_shared_prefix:
   loss_epsilon: 1.0e-12
   
 
-standard_batch: # 标准方法
+legacy_standard_batch: # 保留原有离散路径评分实现
   graphrag_response: "basic_shared_prefix"
   extract_keywords: "basic"
   retrieve_path: "standard"
@@ -183,6 +183,27 @@ standard_batch: # 标准方法
   top_k_per_entity: true 
   lr : 0.5
   loss_epsilon: 1.0e-12
+
+# 标准方法：连续路径效用、保真度/冲突门控和公式 (2)-(4) 更新。
+standard_batch:
+  graphrag_response: "basic_shared_prefix"
+  extract_keywords: "basic"
+  retrieve_path: "standard"
+  simThreshold: 0
+  score_weight: 0.5
+  scoreThreshold: -2
+  redundant_process: "basic_only_relationship_strict"
+  feedback_process: "continuous_for_path_shared_prefix"
+  top_k_per_entity: true
+  lr: 0.5
+  loss_epsilon: 1.0e-12
+  relation_evolution:
+    enabled: true
+    max_hop: 2
+    soft_suppression: false
+    prune_low_score: false
+    shortcut_relation_prefix: "shortcut"
+    shortcut_label_mode: "llm"
   
 
 basic_batch: # 基础方法, 优化的  使用中！

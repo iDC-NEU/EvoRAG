@@ -17,6 +17,7 @@ from llama_index.core.prompts.prompt_type import PromptType
 import json
 import re
 import time
+import math
 
 from chat.chat_base import ChatBase
 from llmragenv.LLM.llm_base import LLMBase
@@ -4125,6 +4126,125 @@ class ChatGraphRAG(ChatBase):
                 print(f"feedback_standard_shared_prefix_batch output chat error: {e}\nllm response: {response_batch}")
                 retry += 1       
         return [], [], 0
+
+    @staticmethod
+    def _parse_continuous_feedback(raw_response, path_count):
+        """Validate evaluator output before it can influence graph scores."""
+        invalid = {
+            "valid": False,
+            "reason": "invalid evaluator response",
+            "Insufficient_information": True,
+            "Path_scores": {},
+        }
+        try:
+            parsed = json.loads(raw_response.strip("`\\n "))
+            if not isinstance(parsed, dict):
+                raise ValueError("top-level JSON value must be an object")
+            feedback_score = parsed.get("feedback_score")
+            insufficient = parsed.get("Insufficient_information")
+            path_scores = parsed.get("Path_scores")
+            if isinstance(feedback_score, bool) or not isinstance(feedback_score, (int, float)):
+                raise ValueError("feedback_score must be numeric")
+            if not math.isfinite(float(feedback_score)) or not 1.0 <= float(feedback_score) <= 5.0:
+                raise ValueError("feedback_score must be in [1, 5]")
+            if not isinstance(insufficient, bool):
+                raise ValueError("Insufficient_information must be boolean")
+            if not isinstance(path_scores, dict):
+                raise ValueError("Path_scores must be an object")
+
+            validated_scores = {}
+            for path_id, values in path_scores.items():
+                match = re.fullmatch(r"Path ([0-9]+)", path_id) if isinstance(path_id, str) else None
+                if match is None or int(match.group(1)) >= path_count:
+                    raise ValueError(f"unknown path identifier: {path_id}")
+                if not isinstance(values, dict):
+                    raise ValueError(f"{path_id} must be an object")
+                supportiveness = values.get("supportiveness")
+                fidelity = values.get("fidelity")
+                conflict = values.get("conflict")
+                numeric_values = (supportiveness, fidelity, conflict)
+                if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in numeric_values):
+                    raise ValueError(f"{path_id} contains a non-numeric score")
+                if not all(math.isfinite(float(value)) for value in numeric_values):
+                    raise ValueError(f"{path_id} contains a non-finite score")
+                if not -1.0 <= float(supportiveness) <= 1.0:
+                    raise ValueError(f"{path_id}.supportiveness must be in [-1, 1]")
+                if float(fidelity) not in (-1.0, 1.0) or float(conflict) not in (-1.0, 1.0):
+                    raise ValueError(f"{path_id}.fidelity/conflict must be either -1 or 1")
+                validated_scores[path_id] = {
+                    "supportiveness": float(supportiveness),
+                    "fidelity": int(fidelity),
+                    "conflict": int(conflict),
+                }
+            return {
+                "valid": True,
+                "feedback_score": float(feedback_score),
+                "Insufficient_information": insufficient,
+                "Path_scores": validated_scores,
+            }
+        except (AttributeError, TypeError, ValueError, json.JSONDecodeError) as error:
+            invalid["reason"] = str(error)
+            return invalid
+
+    def chat_without_stream_for_continuous_feedback_shared_prefix_batch(
+        self,
+        query: List[str],
+        response: List[str],
+        reference_answer: List,
+        filtered_retrieve_result_batch: List[List[str]],
+    ):
+        """Batch evaluator for continuous path utility, with total-result safety."""
+        response_count = len(query)
+        if not all(
+            len(items) == response_count
+            for items in (response, reference_answer, filtered_retrieve_result_batch)
+        ):
+            raise ValueError("continuous feedback inputs must have equal batch lengths")
+
+        prompt_system_batch = []
+        prompt_user_batch = []
+        for index in range(response_count):
+            context = "".join(
+                f"Path {path_id}:\\t{path}\\n"
+                for path_id, path in enumerate(filtered_retrieve_result_batch[index])
+            )
+            prompt_system_batch.append(shared_prefix.format(knowledge_sequences=context))
+            prompt_user_batch.append(
+                score_feedback_prompt_continuous_user_shared_prefix.format(
+                    question=query[index],
+                    reference_answer=json.dumps(reference_answer[index], ensure_ascii=False),
+                    last_response=response[index],
+                )
+            )
+
+        invalid_batch = [
+            {
+                "valid": False,
+                "reason": "evaluator request failed",
+                "Insufficient_information": True,
+                "Path_scores": {},
+            }
+            for _ in range(response_count)
+        ]
+        for attempt in range(1, 4):
+            try:
+                raw_batch, prompt_len, elapsed = self._llm.chat_with_ai_with_system(
+                    prompt_system_batch, prompt_user_batch
+                )
+                if len(raw_batch) != response_count:
+                    raise ValueError(
+                        f"evaluator returned {len(raw_batch)} results for {response_count} requests"
+                    )
+                if not isinstance(prompt_len, list) or len(prompt_len) != response_count:
+                    prompt_len = [0] * response_count
+                parsed_batch = [
+                    self._parse_continuous_feedback(raw, len(filtered_retrieve_result_batch[index]))
+                    for index, raw in enumerate(raw_batch)
+                ]
+                return parsed_batch, prompt_len, elapsed
+            except Exception as error:
+                print(f"continuous feedback batch attempt {attempt} failed: {error}")
+        return invalid_batch, [0] * response_count, 0
     
     # +++
     def chat_without_stream_for_socre_feedback_basic_shared_prefix(self, message: str, response: str, triplet_unique= []):

@@ -124,11 +124,7 @@ algorithm: "standard_batch"
 batch_size: 16
 ```
 
-Important:
-
-Before running the startup script (run.sh), ensure that the ALGORITHM variable in the script matches the algorithm field in config/algorithm.yaml.
-
-The startup script can also override additional parameters such as the specific LLM model to use, number of iterations, and other runtime settings.
+`run_batch.sh` and `run_noise.sh` explicitly pass `--algorithm standard_batch`. This profile uses continuous supportiveness in `[-1,1]`; fidelity and conflict are binary gates, and only `F=1, C=-1` propagates supportiveness. It validates evaluator responses and applies the PyTorch update in formulas (2)-(4). The earlier discrete `2/1/-2` shared-prefix implementation is preserved as `legacy_standard_batch` for historical experiments.
 
 
 
@@ -138,9 +134,21 @@ The startup script can also override additional parameters such as the specific 
 bash run_batch.sh
 ```
 
+The launcher accepts environment overrides without editing the file:
+
+```bash
+LLM=Qwen2.5-32B-Instruct START=0 END=3 bash run_batch.sh
+```
+
 2. Feedback with Noise
 ```bash
 bash run_noise.sh
+```
+
+For a different feedback-noise rate:
+
+```bash
+RATE=0.2 START=3 END=6 bash run_noise.sh
 ```
 
 This script runs the feedback phase with controlled noise injection, used to test the robustness of the feedback mechanism.
@@ -184,7 +192,3 @@ The EvoRAG workflow, illustrated above, iteratively refines the knowledge graph 
   <br>
   <b>Code structure</b>
 </p>
-
-
-
-

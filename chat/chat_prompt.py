@@ -187,6 +187,59 @@ Quickly identify and score a **maximum of 6** key supporting or contradicting pa
 **Output**:
 '''
 
+# Continuous evaluator for the standard path-update profile.
+score_feedback_prompt_continuous_user_shared_prefix = '''
+### Task: Evaluate a GraphRAG Answer and Its Evidence Paths
+
+You are the evaluator in a knowledge-graph evolution loop. Use the reference
+answer only to judge the generated answer. Then judge every retrieved path as
+evidence for that generated answer. Return one JSON object and no prose.
+
+### Answer Feedback
+
+`feedback_score` is a number from 1 to 5:
+1 = fully incorrect, 2 = mostly incorrect, 3 = mixed or unclear,
+4 = mostly correct, 5 = fully correct.
+
+### Path Evaluation
+
+For every path you score, return the following three scores:
+
+* `supportiveness` in [-1, 1]: -1 means the path strongly contradicts the
+  generated answer; 0 means irrelevant or neutral; 1 means direct support.
+* `fidelity` is exactly `1` when the path faithfully contains the claimed
+  fact, otherwise exactly `-1`.
+* `conflict` is exactly `1` when the path conflicts with the generated answer,
+  otherwise exactly `-1`.
+
+Do not invent facts beyond the retrieved paths. Only a path with
+`fidelity = 1` and `conflict = -1` propagates supportiveness to graph scores;
+all other paths are gated to neutral. Use the answer feedback when judging
+supportiveness: evidence revealing an incorrect answer should be negative,
+while evidence for a correct answer should be positive. You may omit an
+irrelevant path; omitted paths are treated as neutral by the algorithm.
+
+### Required JSON Schema
+
+{{
+  "feedback_score": number,
+  "Insufficient_information": boolean,
+  "Path_scores": {{
+    "Path 0": {{
+      "supportiveness": number,
+      "fidelity": number,
+      "conflict": number
+    }}
+  }}
+}}
+
+### Input
+
+**Question**: {question}
+**Reference Answer**: {reference_answer}
+**Generated Answer**: {last_response}
+'''
+
 score_feedback_prompt_standard_user_shared_prefix_optimized = '''
 ### Task: Score Key Evidence Paths (Max 6)
 

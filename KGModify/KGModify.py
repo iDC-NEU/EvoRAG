@@ -4722,6 +4722,148 @@ class KGModify:
         )
         if loss.item() == 0.0:
             self.logger.log("Standard loss is zero: expected utility reached one; no gradient update is needed.")
+
+    def _continuous_path_utilities(self, response_dict, path_count, args_param, feedback_noise):
+        """Propagate supportiveness only through the F=1, C=-1 binary gate."""
+        if not response_dict.get("valid", False):
+            self.logger.log(
+                f"Skip continuous update: {response_dict.get('reason', 'invalid evaluator response')}"
+            )
+            return None
+        if response_dict.get("Insufficient_information"):
+            self.logger.log("Continuous evaluator reported insufficient information; no update.")
+            return None
+
+        utilities = []
+        scores = response_dict["Path_scores"]
+        for path_id in range(path_count):
+            evaluation = scores.get(f"Path {path_id}")
+            if evaluation is None:
+                utilities.append(0.0)
+                continue
+            supportiveness = float(evaluation["supportiveness"])
+            fidelity = int(evaluation["fidelity"])
+            conflict = int(evaluation["conflict"])
+            utility = supportiveness if fidelity == 1 and conflict == -1 else 0.0
+            utilities.append(-utility if feedback_noise else utility)
+        return utilities
+
+    def _apply_continuous_autograd_update(
+        self,
+        response_dict,
+        filtered_triple_3d,
+        feedback_noise,
+        args_param,
+        sim_map,
+        forward_scores,
+        forward_alpha,
+    ):
+        """Apply continuous path utility with formulas (2)-(4)."""
+        if not filtered_triple_3d:
+            return
+        utilities = self._continuous_path_utilities(
+            response_dict, len(filtered_triple_3d), args_param, feedback_noise
+        )
+        if utilities is None:
+            return
+
+        path_keys = []
+        display_by_key = {}
+        ordered_keys = []
+        for path in filtered_triple_3d:
+            keys = []
+            for triple in path:
+                key, display = self._standard_triple_keys(triple)
+                if key not in forward_scores:
+                    self.logger.log(f"Skip continuous update: missing forward score for {key}")
+                    return
+                keys.append(key)
+                display_by_key[key] = display
+                if key not in ordered_keys:
+                    ordered_keys.append(key)
+            if not keys:
+                self.logger.log("Skip continuous update: retrieved an empty path")
+                return
+            path_keys.append(keys)
+
+        score_min = float(args_param.score_min)
+        score_max = float(args_param.score_max)
+        if score_max <= score_min:
+            raise ValueError("score_max must be greater than score_min for continuous feedback")
+        contribution_scores = torch.tensor(
+            [
+                float(np.clip(
+                    (float(forward_scores[key]) - score_min) / (score_max - score_min),
+                    0.0,
+                    1.0,
+                ))
+                for key in ordered_keys
+            ],
+            dtype=torch.float64,
+            requires_grad=True,
+        )
+        alpha = torch.tensor(float(forward_alpha), dtype=torch.float64, requires_grad=True)
+        similarities = torch.tensor(
+            [float(sim_map.get(display_by_key[key], 0.0)) for key in ordered_keys],
+            dtype=torch.float64,
+        )
+        key_index = {key: index for index, key in enumerate(ordered_keys)}
+        triplet_probs = torch.clamp(
+            (1.0 - alpha) * similarities + alpha * contribution_scores,
+            min=torch.finfo(torch.float64).eps,
+        )
+        path_logits = torch.stack([
+            # Autograd differentiates the full average-log path score,
+            # including the product/chain-rule factor omitted in the manual derivation.
+            torch.log(triplet_probs[[key_index[key] for key in keys]]).mean()
+            for keys in path_keys
+        ])
+        path_probs = torch.softmax(path_logits, dim=0)
+        utility_weights = torch.tensor(
+            [(utility + 1.0) / 2.0 for utility in utilities], dtype=torch.float64
+        )
+        loss_epsilon = float(getattr(args_param, "loss_epsilon", 1e-12))
+        if not 0.0 < loss_epsilon < 0.5:
+            raise ValueError("loss_epsilon must be in (0, 0.5)")
+        utility_weights.clamp_(min=loss_epsilon, max=1.0)
+        expected_utility = torch.sum(path_probs * utility_weights)
+        if not torch.isfinite(expected_utility) or expected_utility.item() <= 0.0:
+            self.logger.log("Skip continuous update: expected utility is non-finite or non-positive.")
+            return
+        loss = -torch.log(expected_utility)
+        if not torch.isfinite(loss):
+            self.logger.log("Skip continuous update: loss is non-finite.")
+            return
+
+        optimizer = torch.optim.SGD([contribution_scores, alpha], lr=float(args_param.lr))
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        with torch.no_grad():
+            # Project normalized contribution scores and alpha to their valid ranges.
+            contribution_scores.clamp_(0.0, 1.0)
+            alpha.clamp_(0.0, 1.0)
+
+        updated_scores = (
+            contribution_scores.detach() * (score_max - score_min) + score_min
+        ).tolist()
+        for key, updated_score in zip(ordered_keys, updated_scores):
+            old_score = self.triplets_score_modify[key]["score"]
+            score_delta = updated_score - float(forward_scores[key])
+            new_score = float(np.clip(old_score + score_delta, score_min, score_max))
+            self.triplets_score_modify[key]["score"] = new_score
+            self.logger.log(f"{key}, old score: {old_score}, new score: {new_score}")
+
+        old_alpha = float(args_param.score_weight)
+        alpha_delta = alpha.item() - float(forward_alpha)
+        args_param.score_weight = float(np.clip(old_alpha + alpha_delta, 0.0, 1.0))
+        self.logger.log(
+            f"continuous autograd loss: {loss.item():.8f}, "
+            f"expected utility: {expected_utility.item():.8f}, "
+            f"feedback score: {response_dict['feedback_score']:.2f}, "
+            f"alpha: {old_alpha:.8f} -> {args_param.score_weight:.8f}"
+        )
+
     # 冗余处理
     def redundant_process(self, method, filtered_triple_3d, index):
         redundancy_start_time = time.perf_counter()
@@ -5093,6 +5235,25 @@ class KGModify:
                     forward_scores=forward_scores,
                     forward_alpha=forward_alpha,
                 )
+
+        elif method == 'continuous_for_path_shared_prefix':
+            context = "".join(
+                f"Path {path_id}:\t{sentence}\n"
+                for path_id, sentence in enumerate(filtered_retrieve_result)
+            )
+            self.logger.log(context)
+            self.logger.log(json.dumps(response_dict, indent=2, ensure_ascii=False))
+            forward_scores = standard_forward_scores or self._standard_score_snapshot(filtered_triple_3d)
+            forward_alpha = args_param.score_weight if standard_forward_alpha is None else standard_forward_alpha
+            self._apply_continuous_autograd_update(
+                response_dict=response_dict,
+                filtered_triple_3d=filtered_triple_3d,
+                feedback_noise=feedback_noise,
+                args_param=args_param,
+                sim_map=sim_map,
+                forward_scores=forward_scores,
+                forward_alpha=forward_alpha,
+            )
 
         elif method == "basic_for_triplet_shared_prefix":
             # 此时 filtered_retrieve_result 是 triplet_unique
@@ -6235,7 +6396,7 @@ class KGModify:
         self.triplets_score = triplets_score
         self.triplets_score_modify = copy.deepcopy(triplets_score)
         self.retriver.triplets_score = triplets_score # 传递给retriver
-        if self.args.feedback_process == 'standard_for_path_shared_prefix':
+        if self.args.feedback_process in ('standard_for_path_shared_prefix', 'continuous_for_path_shared_prefix'):
             self._load_standard_state()
             # Standard retrieval must observe the scores updated by previous batches.
             self.retriver.triplets_score = self.triplets_score_modify
@@ -6806,6 +6967,14 @@ class KGModify:
                 if self.args.feedback_process == 'standard_for_path_shared_prefix':
                     feedback_response_batch, prompt_len, feedback_response_time = self.graphrag.chat_without_stream_for_socre_feedback_standard_shared_prefix_batch(self.dataset.query[start_index: end_index], self.response[start_index: end_index], filtered_retrieve_result_batch)
 
+                elif self.args.feedback_process == 'continuous_for_path_shared_prefix':
+                    feedback_response_batch, prompt_len, feedback_response_time = self.graphrag.chat_without_stream_for_continuous_feedback_shared_prefix_batch(
+                        self.dataset.query[start_index: end_index],
+                        self.response[start_index: end_index],
+                        self.dataset.answer[start_index: end_index],
+                        filtered_retrieve_result_batch,
+                    )
+
                     # for i, index in enumerate(range(start_index, end_index)):
                     #     data[index]['feedback_response'] = feedback_response_batch[i]
                     #     data[index]['feedback_prompt_tokens'] = prompt_len[i]
@@ -6893,11 +7062,11 @@ class KGModify:
 
                 # 反馈处理
                 if self.args.feedback:
-                    if self.args.feedback_process == 'standard_for_path_shared_prefix' or self.args.feedback_process == 'basic_for_triplet_shared_prefix' or self.args.feedback_process == "leaderboardStrategy" or self.args.feedback_process == "leaderboardStrategy_abaltion":
+                    if self.args.feedback_process in ('standard_for_path_shared_prefix', 'continuous_for_path_shared_prefix', 'basic_for_triplet_shared_prefix', "leaderboardStrategy", "leaderboardStrategy_abaltion"):
                         feedback_process_start_time = time.perf_counter()
                         self.feedback_process_one(
                             method = self.args.feedback_process,
-                            filtered_retrieve_result = filtered_retrieve_result_batch[i] if self.args.feedback_process == "standard_for_path_shared_prefix" else triplet_unique_batch[i],
+                            filtered_retrieve_result = filtered_retrieve_result_batch[i] if self.args.feedback_process in ('standard_for_path_shared_prefix', 'continuous_for_path_shared_prefix') else triplet_unique_batch[i],
                             response_dict = data[index]["feedback_response"],
                             filtered_triple_3d = data[index]['filtered_triple_3d'],
                             flag_TF = data[index]['label'], 
@@ -7001,7 +7170,7 @@ class KGModify:
         if self.args.feedback:    
             with open(f"./logs/{self.args.algorithm}/triplets/{self.args.space_name}_{self.args.iteration+1}.json", "w", encoding="utf-8") as file:
                 json.dump(self.triplets_score_modify, file, ensure_ascii=False, indent=2)
-            if self.args.feedback_process == 'standard_for_path_shared_prefix':
+            if self.args.feedback_process in ('standard_for_path_shared_prefix', 'continuous_for_path_shared_prefix'):
                 self._save_standard_state()
         
         if self.args.only_error:
@@ -8182,7 +8351,8 @@ class KGModify:
             else:
                 streaks.pop(key, None)
 
-        # Use the pre-suppression high-score graph for this iteration's fusion.
+        # Start only from high-score triplets. Every appended neighbor is also
+        # checked against this threshold before it can enter a fused path.
         high_triplets = [
             (key, triplet, score)
             for key, triplet, score in scored_triplets
@@ -8194,7 +8364,9 @@ class KGModify:
             for value in self.triplets_score_modify.values()
             if isinstance(value.get("triplet"), list) and len(value["triplet"]) == 3
         }
-        for item in high_triplets:
+        for item in scored_triplets:
+            if item[0] in pruned:
+                continue
             adjacency.setdefault(str(item[1][0]), []).append(item)
         for neighbors in adjacency.values():
             neighbors.sort(key=lambda item: item[2], reverse=True)
@@ -8207,7 +8379,11 @@ class KGModify:
                 current_triplet, path, visited_entities = queue.pop(0)
                 if len(path) >= config["max_hop"]:
                     continue
-                for _, neighbor, _ in adjacency.get(str(current_triplet[2]), []):
+                for _, neighbor, neighbor_score in adjacency.get(str(current_triplet[2]), []):
+                    # Neighbors are sorted descending, so later candidates cannot
+                    # meet Eq. (10) once this one is below the high threshold.
+                    if neighbor_score < high_threshold:
+                        break
                     target = str(neighbor[2])
                     if target in visited_entities:
                         continue
@@ -8221,27 +8397,32 @@ class KGModify:
                             for triple in next_path
                         ) / len(next_path)
                         endpoint_pair = (start_head, target)
-                        if path_score >= high_threshold and endpoint_pair not in endpoint_pairs:
-                            relation = self._shortcut_relation_label(next_path, config)
-                            shortcut_key = f"{start_head} {relation} {target}"
-                            shortcut = [start_head, relation, target]
-                            try:
-                                self.graph_database.upsert_triplet(shortcut)
-                            except Exception as error:
-                                self.logger.log(
-                                    f"Relation fusion failed for {shortcut_key}: {error}"
-                                )
-                            else:
-                                self.triplets_score_modify[shortcut_key] = {
-                                    "triplet": shortcut,
-                                    "score": path_score,
-                                }
-                                endpoint_pairs.add(endpoint_pair)
-                                created_shortcuts.append({
-                                    "triplet": shortcut,
-                                    "score": path_score,
-                                    "source_path": next_path,
-                                })
+                        # A direct endpoint edge suppresses only this candidate;
+                        # continue leaves later sorted neighbors eligible.
+                        if endpoint_pair in endpoint_pairs:
+                            continue
+                        if path_score < high_threshold:
+                            continue
+                        relation = self._shortcut_relation_label(next_path, config)
+                        shortcut_key = f"{start_head} {relation} {target}"
+                        shortcut = [start_head, relation, target]
+                        try:
+                            self.graph_database.upsert_triplet(shortcut)
+                        except Exception as error:
+                            self.logger.log(
+                                f"Relation fusion failed for {shortcut_key}: {error}"
+                            )
+                        else:
+                            self.triplets_score_modify[shortcut_key] = {
+                                "triplet": shortcut,
+                                "score": path_score,
+                            }
+                            endpoint_pairs.add(endpoint_pair)
+                            created_shortcuts.append({
+                                "triplet": shortcut,
+                                "score": path_score,
+                                "source_path": next_path,
+                            })
                     queue.append((neighbor, next_path, next_entities))
 
         state["low_score_streak"] = streaks
