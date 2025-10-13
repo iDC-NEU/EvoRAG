@@ -56,7 +56,11 @@ nohup.out
 /llmragenv/vllm_batch_avg.py
 test.py
 /templates/triplet.json
+# New experiment launchers stay local unless explicitly added to Git.
 *.sh
+*.bash
+*.zsh
+*.command
 !run_batch.sh
 !run_noise.sh
 !run_case_pruning.sh
@@ -68,3 +72,6 @@ test.py
 *.tar.gz
 *.tgz
 /temp/
+
+# Local paper builds and exports
+/paper/

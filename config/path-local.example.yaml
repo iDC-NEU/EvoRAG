@@ -1,8 +1,9 @@
 # Copy this file to config/path-local.yaml and fill in local paths and API keys.
 LLM:
-  local-model:
-    template_format: Qwen2.5
-    modelpath: /absolute/path/to/model
+  vllm:
+    local-model:
+      template_format: Qwen2.5
+      modelpath: /absolute/path/to/model
   api:
     example-model:
       url: https://api.example.com/v1
