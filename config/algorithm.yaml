@@ -43,16 +43,16 @@ llm:
 
   gpt:
     url: https://api.aigc798.com/v1/
-    key: sk-IEnkbBAtmH6L7YuApel4OSTcmdxizcuqpXl4xPTXeaziDA3e
+    key: YOUR_API_KEY
 
 
   llama:
     url: http://localhost:11434/v1
     key: ollama
     # url: https://qianfan.baidubce.com/v2
-    # key: bce-v3/ALTAK-lGkipQ7AFP2oP2uq3Z5II/e816c8829f4f6ad0b165fe71bb5283831db2536b
+    # key: YOUR_API_KEY
     # url: aip.baidubce.com
-    # key: OlvUN2cqFVeQDGoB6N36Gh2f
+    # key: YOUR_API_KEY
     # MODEL_NAME: llama2:70b
     # MODEL_NAME=llama2:70b
 
@@ -81,10 +81,10 @@ organization: iDC-NE
 embedding: # 使用的嵌入模型
   name: "huggingface"
   model: "BAAI/bge-large-en-v1.5"
-  # device: "cuda:1"
   dim: 1024
   device: "cuda:0"
-  batch_size: 48 # 批处理大小
+  embed_batch_size: 1024 # 批处理大小 48 4 128 8192
+  num_workers: 4 # 数据加载的线程数
 
 
 shouldRebuildDatabase: false # 是否重建数据库
@@ -103,7 +103,9 @@ pruning: 10 # 每个字体保留的路径数量
 # algorithm: "standard_batch"  # 文中算法
 # algorithm: "basic_batch"  # 实际的批处理算法
 algorithm: "leaderboardStrategy"  # 分数算法
-batch_size: 8 # 批处理大小，仅在batch_standard算法中使用
+# algorithm: "leaderboardStrategy_abaltion"  # 分数算法 提示词消融实验
+# algorithm: "llm_batch"  # llm only batch
+batch_size: 8 # 批处理大小 8
 
 
 # llm_fb_name: "qwen2.5:32b-instruct-fp16" # "qwen3_32b" # 当前向与反向分离时，前向使用该变量找到上一次反向修改的三元组分数
@@ -111,6 +113,12 @@ batch_size: 8 # 批处理大小，仅在batch_standard算法中使用
 redundancy: false # 是否处理冗余关系
 feedback: true # 是否进行反馈
 rate: 0.0 # feedback noise rate
+
+
+llm_batch:
+  graphrag_response: "llm_only"
+
+
 
 evolve_basic: # 两阶段llm一直在变，llm_name与llm_fb_name不变
   graphrag_response: "basic"
@@ -164,14 +172,14 @@ standard_batch: # 标准方法
   lr : 5000000 
   
 
-basic_batch: # 基础方法, 优化的
+basic_batch: # 基础方法, 优化的  使用中！
   graphrag_response: "basic_shared_prefix"
   extract_keywords: "basic"
   retrieve_path: "basic"
-  # simThreshold: 0.55 # 相似度阈值
-  simThreshold: 0 # 相似度阈值
+  simThreshold: 0.55 # 相似度阈值
+  # simThreshold: 0 # 相似度阈值
   score_weight: 0.5 # 评分权重，0.5表示相似度和评分各占一半
-  scoreThreshold: 61 # 评分阈值
+  scoreThreshold: 71 # 评分阈值
   redundant_process: "basic_only_relationship_strict" # 仅处理冗余关系，并且严格按照头尾相同分组
   feedback_process: "basic_for_triplet_shared_prefix" # 对单个三元组评分
   top_k_per_entity: true # 用不到
@@ -183,10 +191,24 @@ leaderboardStrategy: # 准确率方法
   extract_keywords: "basic"
   retrieve_path: "basic"
   # simThreshold: 0.55 # 相似度阈值
-  simThreshold: 0 # 相似度阈值
+  simThreshold: 0.55 # 相似度阈值  # 0.55
   score_weight: 0.5 # 评分权重，0.5表示相似度和评分各占一半
-  scoreThreshold: 71 # 评分阈值
+  scoreThreshold: 71 # 评分阈值  71 0
   redundant_process: "basic_only_relationship_strict" # 仅处理冗余关系，并且严格按照头尾相同分组
   feedback_process: "leaderboardStrategy" # 对单个三元组评分
+  top_k_per_entity: true # 用不到
+  lr : 5000000 # 用不到
+
+
+leaderboardStrategy_abaltion: # 准确率方法 提示词三维度消融
+  graphrag_response: "basic_shared_prefix"
+  extract_keywords: "basic"
+  retrieve_path: "basic"
+  # simThreshold: 0.55 # 相似度阈值
+  simThreshold: 0.55 # 相似度阈值  # 0.55
+  score_weight: 0.5 # 评分权重，0.5表示相似度和评分各占一半
+  scoreThreshold: 71 # 评分阈值  71 0
+  redundant_process: "basic_only_relationship_strict" # 仅处理冗余关系，并且严格按照头尾相同分组
+  feedback_process: "leaderboardStrategy_abaltion" # 对单个三元组评分
   top_k_per_entity: true # 用不到
   lr : 5000000 # 用不到

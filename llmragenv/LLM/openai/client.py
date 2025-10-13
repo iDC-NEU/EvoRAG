@@ -18,12 +18,12 @@ from logger import Logger
 import requests
 import json
 
-def get_access_token():
+def get_access_token(key):
     """
     使用应用API Key，应用Secret Key 获取access_token，替换下列示例中的应用API Key、应用Secret Key
     """
         
-    url = "https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=OlvUN2cqFVeQDGoB6N36Gh2f&client_secret=T71K1J8xzDaRrpMQK8ckFDY5lfeFXjAy"
+    url = key
     
     payload = json.dumps("")
     headers = {
@@ -42,7 +42,7 @@ class OpenAIClient(LLMBase):
         super().__init__()
         if model_name == 'llama_3_8b':
             self.model_name = 'llama_3_8b'
-            self.url = "https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/llama_3_8b?access_token=" + get_access_token()
+            self.url = "https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/llama_3_8b?access_token=" + get_access_token(key)
             print(f"Use openai backend to generate")
             response = self.chat_with_ai("who are you?")
             print(f"\n test openai model {self.model_name} : {response}\n")
@@ -54,7 +54,7 @@ class OpenAIClient(LLMBase):
             self.client = OpenAI(
                 # 若没有配置环境变量，请用百炼API Key将下行替换为：api_key="sk-xxx",
                 # api_key=os.getenv("DASHSCOPE_API_KEY"),
-                api_key="sk-9d5825d8cc254d0ea03ceab8b8241a18",
+                api_key=key,
                 base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
             )
             print(f"Use openai backend to generate")
@@ -64,7 +64,7 @@ class OpenAIClient(LLMBase):
         elif model_name == 'meta-llama-3-8b':
         
             self.client = OpenAI(
-                api_key = "bce-v3/ALTAK-lGkipQ7AFP2oP2uq3Z5II/e816c8829f4f6ad0b165fe71bb5283831db2536b",
+                api_key = key,
                 base_url = "https://qianfan.baidubce.com/v2",
             )
             print("No longer supported meta-llama-3-8b(openai:client.py)")

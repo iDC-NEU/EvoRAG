@@ -21,6 +21,7 @@ from llmragenv.LLM.llm_base import LLMBase
 from logger import Logger
 from chat.chat_prompt import llama_instruct_system, llama_instruct_user, qwen2_instruct_system, qwen2_instruct_user, qwen3_instruct_system, qwen3_instruct_user_noThink, qwen3_instruct_user_think
 from utils.config import path_config
+import requests # 需要导入 requests 来发送卸载指令
 
 class OllamaClient(LLMBase):
 
@@ -53,16 +54,15 @@ class OllamaClient(LLMBase):
         
     @override
     def chat_with_ai(self, prompt: str, history: List[List[str]] | None = None) -> str | None:
-        
+        start_time = time.time()
         response = self.client.complete(prompt)
-        
-        return response.text
+        end_time = time.time()
+        return response.text, 404, end_time-start_time
     
-    @override
-    def chat_with_ai_with_system(self, prompt_system: str, prompt_user: str, history: List[List[str]] | None = None, enable_thinking = False) -> str | None:
-        # assert False, "HuggingfaceClient does not support chat_with_ai_with_system method. Please use chat_with_ai instead."
-        return self.chat_with_ai(prompt_system + prompt_user, history)
-    
+    # @override
+    # def chat_with_ai_with_system(self, prompt_system: str, prompt_user: str, history: List[List[str]] | None = None, enable_thinking = False) -> str | None:
+    #     # assert False, "HuggingfaceClient does not support chat_with_ai_with_system method. Please use chat_with_ai instead."
+    #     return self.chat_with_ai(prompt_system + prompt_user, history)
 
     @override
     def chat_with_ai_with_system(self, prompt_system: str | List[str], prompt_user: str | List[str], history: List[List[str]] | None = None, enable_thinking = False) -> str | None:
@@ -102,9 +102,9 @@ class OllamaClient(LLMBase):
         response = []
         prompt_len = []
         for prompt_item in prompt:
-            response_item = self.chat_with_ai(prompt_item)
+            response_item, prompt_len_item, generate_time_item = self.chat_with_ai(prompt_item)
             response.append(response_item)
-            prompt_len.append(404)
+            prompt_len.append(prompt_len_item)
         end_time = time.time()
 
         return response, prompt_len, end_time - start_time
@@ -133,37 +133,28 @@ class OllamaClient(LLMBase):
         # print(response.raw)
         return response.message.content, response.raw.get("prompt_eval_count", 0)
     
+    def unload_model(self):
+        """
+        显式发送请求给 Ollama 服务，将当前模型从内存/显存中卸载。
+        """
+        try:
+            print(f"正在卸载 Ollama 模型: {self.model_name}...")
+            # Ollama API 约定：发送 keep_alive=0 可以立即释放模型
+            unload_url = f"http://localhost:11434/api/generate"
+            payload = {
+                "model": self.model_name,
+                "keep_alive": 0
+            }
+            response = requests.post(unload_url, json=payload, timeout=10)
+            if response.status_code == 200:
+                print(f"模型 {self.model_name} 已成功卸载，显存已释放。")
+            else:
+                print(f"卸载模型失败，状态码: {response.status_code}")
+        except Exception as e:
+            print(f"尝试卸载模型时发生错误: {e}")
 
-
-    
-
-
-# class OllamaClient(LLMBase):
-
-#     def __init__(self, model_name, url, key):
-#         super().__init__()
-#         self.model_name  = model_name
-#         base_url = re.sub(r'/v\d+', '', url)
-
-#         self.client = Ollama(model=model_name, request_timeout=2000000, base_url=base_url)
-
-#         # self.logger = Logger("AIClient")
-#         # self.logger.info("Use llama_index backend to generate")
-#         print("Use llama_index backend to generate")
-        
-#         response = self.chat_with_ai("who are you?")
-#         print_text(f"\n test llm model {self.model_name} : {response}\n", color='yellow')
-
-        
-#     @override
-#     def chat_with_ai(self, prompt: str, history: List[List[str]] | None = None) -> str | None:
-        
-#         response = self.client.complete(prompt)
-        
-#         return response.text
-
-#     @override
-#     def chat_with_ai_stream(self, prompt: str, history: List[List[str]] | None = None):
-        
-#         return self.client.stream_complete(prompt)
-
+    def __del__(self):
+        """
+        当对象被销毁（程序结束）时，自动尝试卸载模型。
+        """
+        self.unload_model()

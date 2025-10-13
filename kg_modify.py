@@ -1,13 +1,5 @@
-'''
-Author: fzb0316 fzb0316@163.com
-Date: 2024-10-18 16:47:15
-LastEditors: fzb0316 fzb0316@163.com
-LastEditTime: 2024-10-30 11:10:27
-FilePath: /BigModel/RAGWebUi_demo/kg_modify.py
-Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
-'''
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1, 2"  # 必须在导入 torch 或 vllm 之前设置！
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0, 1"  # 必须在导入 torch 或 vllm 之前设置！
 import argparse
 
 
@@ -57,14 +49,37 @@ if __name__ == "__main__":
     parser.add_argument("--space_name", type=str, help="graph database space name (e.g., rgb, ) ", default='rgb')
     parser.add_argument("--option", type=str, help="execution way (e.g., without_rag, graph_rag ) ", default='graph_rag')
     parser.add_argument("--llmbackend", type=str, help="openai or llama_index", default="openai")
-    parser.add_argument("--iteration", type=int, help="number of iteration (e.g., 3, 5 ) ", default='12')
+    parser.add_argument("--iteration", type=int, help="number of iteration (e.g., 3, 5 ) ", default=0)
     parser.add_argument("--type", type=str, help="data of iteration changed or unchanged (e.g., changed, unchanged ) ", default='unchanged')
     parser.add_argument("--pruning", type=int, help="The number of search paths for each entity", default=10)
     parser.add_argument("--entity", type=int, help="Number of entities retrieved per question", default=10)
     parser.add_argument("--hop", type=int, help="Number of entities retrieved per question", default=2)
     parser.add_argument("--similar", type=bool, help="Number of entities retrieved per question", default=False)
     parser.add_argument("--rate", type=float, help="feedback noise rate", default=0.0)
+    parser.add_argument("--cost", type=bool, help="token cost", default=False)
+    parser.add_argument("--align_human", type=bool, help="token cost", default=False)
+    parser.add_argument("--statistics_path", type=bool, help="statistics_path", default=False)
+    parser.add_argument("--use_concurrent", type=bool, help="use_concurrent", default=False) # 一定是配合 evo_data or evo_no_retrieve 使用
+    parser.add_argument("--evo_data", type=bool, help="获取evo的data，包含问答", default=False)
+    parser.add_argument("--evo_no_retrieve", type=bool, help="使用已有的evo的data train，不再检索", default=False)
+    parser.add_argument("--skip_empty_entities", type=bool, help="跳过空检索路径的实体", default=False)
+    parser.add_argument("--evo_case", type=bool, help="使用已有的evo的data 进行case", default=False)
+    # parser.add_argument("--evo_case_final_iteration_for_only_error", type=bool, help="使用已有的evo的data 进行case，对于only_error train拼接的数据，需要确定截止轮次来定位数据名称", default=False)
+    parser.add_argument("--only_error", type=bool, help="仅反馈错误的", default=False)
+    parser.add_argument("--depcache_case", type=bool, help="复现depcache，针对hotpotqa1M_v2，对hotpotqa1M并不适用", default=False)
+    
+    
+    # 一些为了并行实验不受配置文件影响的参数
+    parser.add_argument("--feedback_off", type=bool, help="关闭反馈，用这种方法因为feedback参数配置文件中也有", default=False)  
+    parser.add_argument("--abaltion_on", type=bool, help="使用消融反馈，用这种方法因为feedback参数配置文件中也有", default=False) 
+    # parser.add_argument("--simThreshold_off", type=bool, help="相似度阈值为0，对于hotpotqa1M_v2，完成depcache/ragcache的实验", default=False) 
+    # parser.add_argument("--depcache_case", type=bool, help="使用已有的depcache的data", default=False)
+    # parser.add_argument("--evo_cache", type=bool, help="获取evo的data", default=False)
+
     # parser.add_argument("--case_rate", type=float, help="feedback noise rate", default=0.05)
+    parser.add_argument("--f1", type=bool, help="feedback by f1 score", default=False)
+    parser.add_argument("--human", type=bool, help="feedback by human score", default=False)
+    parser.add_argument("--human_advanced", type=bool, help="feedback by human score", default=False)
 
     
     args = parser.parse_args()
@@ -83,6 +98,16 @@ if __name__ == "__main__":
     # 3. 转成 Box 对象（支持点访问）
     data = Box(algorithm_config)
 
+    # 特殊参数
+    if data.feedback_off:
+        data.feedback = False
+        
+    if data.abaltion_on:
+        data.feedback = True
+        data.feedback_process = "leaderboardStrategy_abaltion"
+        data.algorithm = "leaderboardStrategy_abaltion"
+
+        
     print(data)
     # assert False
 

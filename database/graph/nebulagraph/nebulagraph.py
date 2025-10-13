@@ -274,7 +274,8 @@ class NebulaDB(GraphDatabase):
         self.retriever = None
 
         if not init:
-            self.triplet2id, self.triplet_embeddings = self.generate_embedding()
+            # 暂时不启用triplet2id triplet_embeddings
+            # self.triplet2id, self.triplet_embeddings = self.generate_embedding()
             
             # self.entity2id, self.entity_embeddings = self.generate_entity_embedding()
             # self.entities = self.get_all_entities() 
@@ -1003,12 +1004,12 @@ class NebulaDB(GraphDatabase):
         entities = np.array([str(entity) for entity in sorted(all_entities)], dtype=str)
 
         # 使用嵌入模型生成嵌入
-        embed_model = EmbeddingEnv(embed_name="BAAI/bge-large-en-v1.5", embed_batch_size=10)
+        embed_model = EmbeddingEnv(embed_name="BAAI/bge-large-en-v1.5", embed_batch_size=48)
         
         # embed_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2') # device = "cuda:2"
 
         all_embeddings = []
-        step = 10
+        step = 256 # 10
         n_entities = len(entities)
         
         # 批量生成嵌入

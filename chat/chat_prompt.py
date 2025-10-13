@@ -9,19 +9,124 @@ chat_with_graphrag_for_response_user = (
     "Please write a high-quantify answer for the given question using only the provided context information (some of which might be irrelevant). Answer directly without explanation and keep the response short and direct.\nQuestion: {question}"
 )
 
+llm_only_system = (
+    "You are an expert AI assistant specializing in question answering. "
+)
+
+llm_only_user = (
+    "### Task: Generate Answer\n"
+    "Answer directly without explanation.\n\n"
+    # "If you don't know the answer, please respond with:  'I cannot answer this question.'\n\n"
+    "**Question**: {question}\n"
+)
+
+align_human_system_prompt_strict = """
+You are an automatic evaluator that simulates a simple keyword-matching script.
+You do NOT judge semantic correctness.
+Your only rule is:
+
+- Convert both Model Answer and Ground-Truth Answer to lowercase.
+- If the ground-truth answer (or any acceptable variant) appears as a substring 
+  in the model answer, treat it as correct.
+- Otherwise treat it as wrong.
+
+Scoring criteria:
+1 = The model answer does NOT contain the ground-truth string at all.
+5 = The model answer contains the ground-truth string (case-insensitive).
+Output ONLY 1 or 5. No explanations. No other text.
+"""
+
+align_human_user_prompt_strict = """
+Evaluate using STRING MATCHING ONLY:
+
+Question:
+{question}
+
+Model Answer:
+{model_answer}
+
+Ground-Truth Answer (may contain multiple variants):
+{gold_answer}
+
+Output ONLY 1 or 5. No explanations.
+"""
+
+align_human_system_prompt = """
+You are a human-like evaluator. 
+Your only task is to compare a model's answer with the ground-truth answer and output a score from 1 to 5.
+Do NOT output anything except the number.
+Scoring rules:
+1 = Completely wrong.
+2 = Partially correct but mainly wrong.
+4 = Mostly correct with minor issues.
+5 = Fully correct.
+"""
+
+align_human_user_prompt = """
+Evaluate the following:
+
+Question:
+{question}
+
+Model Answer:
+{model_answer}
+
+Ground-Truth Answer (may contain multiple parts or acceptable variants):
+{gold_answer}
+
+Output ONLY a single number from 1 to 5. No explanations.
+"""
+
+align_human_system_prompt_bak = """
+You are a human-like evaluator.
+Your only task is to compare a model's answer with the ground-truth answer and output a single numeric score.
+
+Output constraints:
+- Output ONLY one number and nothing else.
+
+Decision rules:
+- If the question or either answer contains numeric expressions (numbers, percentages, or values with units), treat it as a numeric answer:
+  - Numeric answers: only output 1 or 5.
+  - A score of 5 requires an EXACT match of the numeric content (value, units, and formatting). Any deviation => 1.
+- Otherwise treat as a non-numeric (ordinary) answer:
+  - Allowed scores: 1, 2, 4, 5.
+  - 1 = Completely wrong.
+  - 2 = Partially correct but mainly wrong.
+  - 4 = Mostly correct with minor issues or omissions.
+  - 5 = Fully correct with complete coverage of required meaning.
+"""
+
+align_human_user_prompt_bak = """
+Evaluate the following. Insert the variables into the braces.
+
+Question:
+{question}
+
+Model Answer:
+{model_answer}
+
+Ground-Truth Answer (may contain multiple parts or acceptable variants):
+{gold_answer}
+
+Instruction: Decide whether this is a numeric case (contains numbers, percents, or units). If numeric, apply numeric rules (only 1 or 5, exact numeric match required). If non-numeric, apply ordinary rules (1,2,4,5). Output ONLY the chosen score number and nothing else.
+"""
+
+
 shared_prefix = (
     "You are an expert AI assistant specializing in knowledge graph question answering. "
     "Your response must be based *only* on the information contained within the provided knowledge sequences below. "
     "Follow the user's specific instructions for the task at hand.\n\n"
-    "### Retrieved Knowledge Paths\n"
+    "### Retrieved Knowledge Paths\n"  # ###
     "{knowledge_sequences}"
 )
 
 chat_with_graphrag_for_response_user_shared_prefix = (
     "### Task: Generate Answer\n"
     "Based on the provided knowledge paths, write a high-quality, concise answer for the following question. "
-    "Use only the provided information. Answer directly without explanation.\n\n"
-    "**Question**: {question}"
+    "Use only the provided information. Answer directly without explanation.\n"
+    # "IMPORTANT: Do NOT output any prefix, label, or colon. Start your answer directly with the content.\n\n"
+    "Strictly follow these rules: 1. Do not restate the question. 2. Do not use 'The answer is...' or similar phrases. 3. Provide only the direct answer (e.g., a name, a date, a location, or a number)."
+    "**Question**: {question}\n"
 )
 
 score_feedback_prompt_standard_user_shared_prefix = '''
@@ -433,19 +538,25 @@ Quickly identify the key supporting or contradicting paths based on the simplifi
 '''
 
 # 这个东西应该交给huggingface client处理
+# llama_instruct_system = (
+#     "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n{system_instruction}"
+# )
+# llama_instruct_user = (
+#     "<|eot_id|>\n<|start_header_id|>user<|end_header_id|>\n\n{user_instruction}<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>"
+# )
+
 llama_instruct_system = (
     "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n{system_instruction}"
 )
-
 llama_instruct_user = (
-    "<|eot_id|>\n<|start_header_id|>user<|end_header_id|>\n\n{user_instruction}<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>"
+    "<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{user_instruction}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
 )
 
 qwen2_instruct_system = (
     "<|im_start|>system\n{system_instruction}\n<|im_end|>\n"
 )
 qwen2_instruct_user = (
-    "<|im_start|>user\n{user_instruction}\n<|im_end|>\n<|im_start|>assistant"
+    "<|im_start|>user\n{user_instruction}\n<|im_end|>\n<|im_start|>assistant\n"
 )
 
 qwen3_instruct_system = (
@@ -677,6 +788,180 @@ score_feedback_prompt_baisc_user = (
   "Retrieved Statement Sets: {knowledge_sequences}\n"
 )
 
+score_feedback_prompt_f1_system = (
+    "You are an AI Auditor evaluating the factual alignment between retrieved knowledge sets and a model's response. "
+    "Using the provided F1 Score, your goal is to identify and score sets of statements that either justified correct factual components or induced specific errors and hallucinations. "
+    "Be exceptionally strict with numerical and entity precision, strictly following the scoring and output logic defined in the user prompt."
+)
+
+score_feedback_prompt_f1_user = (
+  "Crucially, your evaluation must be exceptionally strict regarding numerical values, dates, quantities, statistics, named entities, and other precise factual details derived from the collective information of the set. Exact, literal matches of the information conveyed by the entire set are paramount.\n\n"
+  "Pre-condition for Scoring:\n"
+  "1. Handling 'Insufficient Information':\n"
+  "Regardless of the F1 Score, if the Last Response explicitly states that it cannot answer the query due to insufficient information, or requests more details, do not evaluate or score any sets of statements.\n"
+  "In this case, your only output should be 'Insufficient information'.\n\n"
+  "Evaluation Logic based on F1 Score ({f1_score}):\n"
+  "The F1 Score represents the overlap between the Last Response and the Ground Truth. You must evaluate the Retrieved Statement Sets based on how they contributed to this score:\n\n"
+  "1. If F1 Score > 0 (The response contains correct information):\n"
+  "   * Score Supporting Correct Sets (Reward for Precision/Recall):\n"
+  "     Identify sets of statements that provide the specific, exact facts that align with the CORRECT parts of the Last Response. \n"
+  "     - 3: The set provides essential, direct, and exact factual support for the correct information.\n"
+  "     - 2: The set provides relevant support, but is slightly indirect or contains redundant info.\n"
+  "     - 1: The set provides weak or highly generalized support for the correct answer.\n\n"
+  "2. If F1 Score < 1.0 (The response contains errors, hallucinations, or missing info):\n"
+  "   * Score Sets Supporting the Error (Identify the Source of Hallucination):\n"
+  "     Identify sets of statements whose collective factual content exactly matches the INCORRECT or MISLEADING information present in the Last Response. \n"
+  "     - 3: The set's combined info provides direct, unambiguous, and exact support for the specific error made.\n"
+  "     - 1-2: The set is partially misleading or contextually pushes the response toward the error.\n"
+  "   * Note: If F1 Score is 0, ONLY score 'Error' sets. Do not score 'Correct' sets.\n\n"
+  "General Rules for Relevance and Scoring:\n\n"
+  "* Direct Relevance: Only evaluate sets that directly address the core factual question. Ignore general context.\n"
+  "* Precision is Paramount: Dates, quantities, and entities must match exactly. \n"
+  "  - For Correct components: The set must affirm query constraints perfectly.\n"
+  "  - For Error components: The set must perfectly mirror the specific erroneous value used in the Last Response.\n"
+  "* No New Information: Do not score sets that merely repeat the query without adding factual value.\n"
+  "* Mutual Exclusivity: A single set index should typically not be scored as both 'Correct' and 'Error' unless it contains distinct statements supporting both outcomes independently.\n\n"
+  "Output Format:\n\n"
+  "* For scored sets supporting correct components: Correct: <set_index>:<score> <set_index>:<score> ...\n"
+  "* For scored sets supporting errors/hallucinations: Error: <set_index>:<score> <set_index>:<score> ...\n"
+  "* If no sets are applicable: return No feedback\n"
+  "* If the 'Insufficient Information' pre-condition is met: return Insufficient information\n\n"
+  "Example Output Structures:\n"
+  "Correct: 2:3 5:2\n"
+  "Error: 3:3 7:1\n"
+  "Correct: 1:3\n"
+  "Error: 4:3\n"
+  "No feedback\n"
+  "Insufficient information\n\n"
+  "Do not provide explanations—only output structured results.\n\n"
+  "Query: {question}\n"
+  "F1 Score: {f1_score}\n"
+  "Last Answer: {last_response}\n"
+  "Retrieved Statement Sets: {knowledge_sequences}\n"
+)
+
+score_feedback_prompt_human_system = (
+"You are an AI assistant tasked with evaluating the factual relevance and correctness of retrieved sets of inferential statements (each statement in natural language form) in relation to a given query and the model's previous response (Last Response). "
+"This evaluation occurs in the second step of a process, focusing on sets of statements used or relevant to the Last Response. "
+"Your task is to assign scores only to sets of statements that, when their information is combined and considered as a whole, are directly relevant to the query's specific factual question, ignoring irrelevant ones.\n\n"
+)
+
+score_feedback_prompt_human_user = (
+"Crucially, your evaluation must be exceptionally strict regarding numerical values, dates, quantities, statistics, named entities, and other precise factual details derived from the collective information of the set. Exact, literal matches of the information conveyed by the entire set are paramount.\n\n"
+
+"Interpretation of human_feedback_score:\n"
+"5 - Completely correct: the response semantically matches the answer and its wording exactly appears in at least one expression of the answer.\n"
+"4 - Semantically correct but wording differs: the response conveys the correct meaning but its surface form does not appear in the answer expressions.\n"
+"3 - Insufficient information: the response indicates inability to answer (e.g., 'unknown', 'insufficient information', 'cannot determine').\n"
+"2 - Fails to cover all required answer components.\n"
+"1 - Completely incorrect: the response is semantically inconsistent with the answer.\n\n"
+
+"Pre-condition:\n"
+"If human_feedback_score = 3, your only output should be:\n"
+"Insufficient information\n"
+"Do not evaluate any statement sets in this case.\n\n"
+
+"Evaluation Criteria based on human_feedback_score:\n\n"
+
+"Case A: human_feedback_score in {{5,4}}\n"
+"The Last Response is considered correct overall.\n"
+"You will evaluate two possible types of statement sets:\n\n"
+
+"1. Supporting Correct Sets of Statements:\n"
+"Assign scores only to sets whose combined information directly provides the precise factual basis needed to produce the correct answer.\n"
+"The statements in the set do not individually need to contain the full answer, but their combined meaning must logically and factually lead to it.\n\n"
+
+"Score from 1 to 3:\n"
+"3 = highly precise and essential factual support\n"
+"2 = mostly correct support but somewhat indirect or partially redundant\n"
+"1 = weak but still factually relevant support\n\n"
+
+"2. Contradictory or Misleading Sets of Statements:\n"
+"Assign scores to sets whose combined meaning would lead to an incorrect or conflicting answer.\n"
+"Score from 1 to 3 depending on how strongly the set could mislead reasoning away from the correct answer.\n\n"
+
+"Case B: human_feedback_score in {{1,2}}\n"
+"The Last Response contains incorrect factual content.\n"
+"You will evaluate only statement sets whose combined factual meaning directly supports the specific incorrect content appearing in the Last Response.\n\n"
+
+"Score from 1 to 3:\n"
+"3 = the combined statements clearly and explicitly support the incorrect answer\n"
+"2 = the combined statements partially support the incorrect reasoning\n"
+"1 = weak support for the incorrect content\n\n"
+
+"Important constraints:\n\n"
+
+"* Evaluate sets only as collective semantic units. Individual statements should not be scored separately.\n"
+"* Only evaluate sets directly relevant to answering the core factual query.\n"
+"* Precision is critical: dates, numbers, entities, and identifiers must match exactly when required.\n"
+"* Do not score sets that merely repeat the query without adding new factual information.\n"
+"* Do not score sets providing correct information when human_feedback_score indicates the response is incorrect.\n"
+"* Do not score sets providing incorrect information when human_feedback_score indicates the response is correct, unless they are clearly contradictory or misleading.\n"
+"* Ignore irrelevant or overly generic statement sets.\n\n"
+
+"Output Format:\n\n"
+
+"For sets supporting correct reasoning:\n"
+"Correct: <set_index>:<score> <set_index>:<score> ...\n\n"
+
+"For sets supporting incorrect reasoning or misleading reasoning:\n"
+"Error: <set_index>:<score> <set_index>:<score> ...\n\n"
+
+"If no sets qualify:\n"
+"No feedback\n\n"
+
+"If human_feedback_score = 3:\n"
+"Insufficient information\n\n"
+
+"Examples:\n"
+"Correct: 2:3 5:2\n"
+"Error: 3:3 7:1\n"
+"Correct: 1:3\n"
+"Error: 4:3\n"
+"No feedback\n"
+"Insufficient information\n\n"
+
+"Do not provide explanations. Only output structured results.\n\n"
+
+"Query: {question}\n"
+"Last Response (human_feedback_score = {human_feedback_score}): {last_response}\n"
+"Retrieved Statement Sets: {knowledge_sequences}\n"
+)
+
+score_feedback_prompt_baisc_user_abaltion = '''
+Role: Fact-Consistency Evaluator
+
+Task:
+Evaluate the "Retrieved Statement Sets" against the "Query" and the "Last Answer". You must select the most relevant sets and assign scores based on the correctness of the response.
+
+Input Context:
+- Query: {question}
+- Last Answer Correctness ({flag_TF}): This indicates if the Last Answer is actually True or False.
+- Last Answer: {last_response}
+
+Scoring & Selection Rules:
+1. Selection Limit: From the provided statement sets, select ONLY the most relevant sets to score. You must NOT score more than 10 sets in total.
+2. Score Range: -15 to 15.
+3. Polarity Logic (Crucial):
+   - If Last Answer is True: 
+     * Positive (1 to 15) for sets that support the answer.
+     * Negative (-1 to -15) for sets that contradict the answer.
+   - If Last Answer is False:
+     * Positive (1 to 15) for sets that contradict the incorrect answer (provide truth).
+     * Negative (-1 to -15) for sets that support the error in the answer.
+4. Zero (0): Do not output sets with a score of 0. If a set is irrelevant, simply ignore it.
+
+Output Format:
+- Output only the index and score for the selected sets (max 10): <index>:<score> <index>:<score> ...
+- If no sets are relevant: No feedback
+- If the response indicates "insufficient information": Insufficient information
+
+Do not provide explanations. Only output the structured results.
+
+---
+Retrieved Statement Sets: {knowledge_sequences}
+'''
+
 
 score_feedback_prompt_standard_system = '''You are an expert in knowledge graph question answering. Your sole task is to output a **valid JSON object** that conforms to the required structure.
 You must **not** output explanations, markdown, or any text outside the JSON.'''
@@ -752,6 +1037,58 @@ score_feedback_prompt_standard_assistant_mulRounds = (
     "**Retrieved Knowledge Paths**: \n{knowledge_paths}\n"
     "**Knowledge-derived Answer**: {last_response}"
 )
+
+score_feedback_by_human_system = '''
+# Role
+You are an expert in natural language processing data annotation. Your task is to assign a score to a model-generated Response according to the specified scoring criteria.'''
+
+
+score_feedback_by_human_user = '''
+# Task
+Given the fields query, answer, response, and label, assign a numerical score based on the Scoring Criteria below.
+
+# Data Structure Explanation
+- answer: either a 2D list or a 1D list
+  - 2D list
+    - The first level (sublists) represents the required components of the answer (Part A, Part B, etc.).
+    - The second level (strings) represents different surface forms, paraphrases, or aliases for each component.
+  - 1D list
+    - The first level (items) represents the required components of the answer (Part A, Part B, etc.).
+- label: an initial boolean value generated by simple rule-based matching. It is provided for reference only and should not override semantic judgment.
+
+# Scoring Criteria (Priority: 5 > 3 > 4 > 2 > 1)
+
+5 – Fully Correct:
+The response is semantically correct and its expression exactly matches at least one string in the corresponding answer component list.
+
+4 – Semantically Correct but Format Mismatch:
+It matches all major components of the answer but may include additional content or use different phrasing that prevents an exact string match.
+
+3 – Insufficient Information:
+The response indicates lack of knowledge or inability to answer (e.g., "I don't know", "cannot determine", "insufficient information").
+
+2 – Partially Correct with Errors:
+Fails to cover all required answer components.
+
+1 – Completely Incorrect:
+The response is semantically inconsistent with the answer.
+
+# Important Note
+For answers containing numerical values, the numbers must exactly match those in the answer in order to receive a score of 4 or 5.
+
+After completing the task, verify your decision once more to ensure correctness.
+
+Output only a single integer score from 1 to 5, with no additional text or explanation.
+
+# Input
+query: {query}
+answer: 
+{answer}
+response: {response}
+label: {label}
+
+# Output
+A single integer between 1 and 5.'''
 
 score_feedback_prompt_standard_user2_mulRounds = '''
 ### Output Format (strictly required)

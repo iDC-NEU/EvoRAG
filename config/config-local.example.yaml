@@ -1,0 +1,17 @@
+server:
+  ui_port: 8083
+  ui_share: false
+
+llm:
+  openai_compatible:
+    url: https://api.example.com/v1
+    key: YOUR_API_KEY
+
+database:
+  neo4j:
+    url: bolt://localhost:7690
+    username: neo4j
+    password: YOUR_DATABASE_PASSWORD
+
+organization: YOUR_ORGANIZATION
+config_file: algorithm.yaml

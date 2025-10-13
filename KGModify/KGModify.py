@@ -8,6 +8,8 @@ Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查�
 '''
 
 
+from typing import List
+
 from chat.chat_graphrag import ChatGraphRAG
 from dataset.dataset import Dataset
 from dataset.generate_similar_questions import Generate_dataset
@@ -23,9 +25,11 @@ import datetime
 import numpy as np
 from ignite.metrics import RougeL
 import time
-
-
-
+import os
+from pathlib import Path
+import copy
+from concurrent.futures import ThreadPoolExecutor
+from chat.chat_prompt import score_feedback_by_human_system, score_feedback_by_human_user
 
 
 class KGModify:
@@ -53,6 +57,13 @@ class KGModify:
         self.graphrag_fb = graphrag_fb
         self.logger = None
         self.triplets_score = {}
+        self.triplets_score_modify = {}
+        if self.args.human_advanced:
+            from llmragenv.LLM.llm_factory import ClientFactory
+            self.llm_human = ClientFactory(model_name="qwen3.5-flash", llmbackend="api").get_client()
+            # self.llm_human = ClientFactory(model_name="qwen-flash", llmbackend="api").get_client()
+            # self.llm_human = ClientFactory(model_name="deepseek-v3.2", llmbackend="api").get_client()
+            pass
 
         
     def run(self):
@@ -121,6 +132,8 @@ class KGModify:
             self.evolve_basic_feedback()
         elif self.args.option == "evolve_batch":
             self.evolve_batch()
+        elif self.args.option == "llm_batch":
+            self.llm_batch()
         elif self.args.option == "kg_modify_llama_reproduce_feedback":
             self.kg_modify_llama_reproduce_feedback(int(self.args.iteration))
         elif self.args.option == "kg_modify_llama_reproduce":
@@ -149,6 +162,8 @@ class KGModify:
             self.iteration_error_statistics()
         elif self.args.option == 'short_cut_test':
             self.short_cut_test()
+        elif self.args.option == 'iteration_change_statistics':
+            self.iteration_change_statistics()
         else:
             print("The option is not supports!")
             assert(False)
@@ -714,25 +729,31 @@ class KGModify:
         elif self.args.dataset_name == 'multihop':
             file_path = f'./logs/ragcache/multihop_inference_query_refine_ent10_pruning30.json'
             # file_path = f'./logs/ragcache/multihop_inference_query_refine_ent16_pruning10.json'
+        elif self.args.dataset_name == 'hotpotqa600':
+            file_path = f'./logs/ragcache/graph_rag_baseline_data_hotpotqa600_16_30.json'
         with open(file_path, 'r', encoding='utf-8') as file:
             data_list = json.load(file)  # 直接使用json.load读取文件对象
         
         import datetime
         current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        logger = Logger(f"{self.args.llmbackend}_{self.llm.model_name}_{self.args.option}_{self.args.dataset_name}_{self.args.entity}_{self.args.pruning}_{current_time}")
-        
+        logger = Logger(f"./ragcache/logs/{self.args.llmbackend}_{self.args.llm}_{self.args.option}_{self.args.dataset_name}_{self.args.entity}_{self.args.pruning}_{current_time}")
+
         ##使用最终数据集测评
         acc = 0
         acc_llm = 0
-        acc_refuse = 0
         query_number = 0
         redundant = []
         data = []
         tokens_cost = []
+        response_time = []
+
+        # data_list = data_list[:10]
         
         for i in range(len(data_list)):
-            # if i >= 2:
+            # if i >= 4:
             #     break
+            # if i not in [99, 100, 101, 102, 103, 104, 105, 106]:
+            #     continue
             print(f"kg modify id : {i}")
             query_number += 1
             logger.log("\n\n")
@@ -744,12 +765,15 @@ class KGModify:
             # retrieve_result = data_list[i]['context_str']
             logger.log(f"retrieve result : {json.dumps(retrieve_result_list, indent=2)}")
             # res = self.graphrag.chat_without_stream_with_triplets_llama_instruct(data_list[i]['question'], retrieve_result_list)
-            res, num_input_tokens, prompt = self.graphrag.chat_without_stream_with_triplets_llama_instruct(data_list[i]['question'], retrieve_result_list)
+            # res, num_input_tokens, prompt = self.graphrag.chat_without_stream_with_triplets_llama_instruct(data_list[i]['question'], retrieve_result_list)
+            res, num_input_tokens, response_time_item = self.graphrag.chat_without_stream_with_triplets_shared_prefix(data_list[i]['question'], retrieve_result_list)
 
             self.response.append(res)
             data_list[i]['generated'] = res
             data_list[i]['tokens'] = num_input_tokens
+            data_list[i]['response_time'] = response_time_item
             tokens_cost.append(num_input_tokens)
+            response_time.append(response_time_item)
 
             flag = False
             flag_label = self.checkanswer(res, data_list[i]['answer'])
@@ -759,6 +783,7 @@ class KGModify:
             logger.log(f"Is the response from the LLM correct?: {'Yes' if int(flag) == 1 else 'No'}")
             logger.log(f"answer: {data_list[i]['answer']}")
             logger.log(f"num_input_tokens: {num_input_tokens}")
+            logger.log(f"response_time_item: {response_time_item}")
             logger.log(f"graph rag response: {res}")
             data_list[i]['label'] = flag_label
             data_list[i]['flag'] = flag
@@ -783,13 +808,14 @@ class KGModify:
         squad_v2_metric = load("squad_v2")
         results = squad_v2_metric.compute(predictions = response_list, references = answer_list)
         logger.log(f"----------em f1 ...------------\n{json.dumps(results, indent=2)}")
+
+        logger.log(f"\n\n-----------------------response time avg: {sum(response_time)/len(response_time)}-----------------------")
         logger.log(f"\n\n-----------------------tokens cost avg: {sum(tokens_cost)/len(tokens_cost)}-----------------------")
         logger.log(f"\n\n-----------------------accuracy: {acc/query_number}-----------------------")
-        logger.log(f"\n\n-----------------------Probability of rejection: {acc_refuse/query_number}-----------------------")
         # if self.llm.model_name == '':
         print(f"len(data_list): {len(data_list)}")
 
-        with open(f"./logs/stage/Meta-Llama-3-8B-Instruct_{self.args.option}_{self.args.dataset_name}_{self.args.entity}_{self.args.pruning}.json", "w", encoding="utf-8") as f:
+        with open(f"./logs/ragcache/logs/{self.args.llmbackend}_{self.args.llm}_{self.args.option}_{self.args.dataset_name}_{self.args.entity}_{self.args.pruning}.json", "w", encoding="utf-8") as f:
             f.write(json.dumps(data_list, indent=2))
 
     def baseline_redundancy_stage2_for_ragcache(self,): # 使用qwen2.5:32b指令模型
@@ -2266,7 +2292,7 @@ class KGModify:
             current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         # logger = Logger(f"{self.args.llmbackend}_{self.llm.model_name}_{self.args.option}_{self.args.dataset_name}_baseline_{current_time}")
         # logger = Logger(f"./a_logs/{self.args.llmbackend}_{self.llm.model_name}_{self.args.option}_{self.args.space_name}_{self.args.entity}_{self.args.pruning}_{current_time}")
-        logger = Logger(f"./a_logs/{self.args.option}_{self.args.space_name}_{self.args.entity}_{self.args.pruning}_{current_time}")
+        logger = Logger(f"./ragcache/logs/{self.args.option}_{self.args.space_name}_{self.args.entity}_{self.args.pruning}_{current_time}")
 
         ##使用最终数据集测评
         acc = 0
@@ -2277,9 +2303,12 @@ class KGModify:
         data = []
         query_path_count = []
         entity_path_count = []
+        keywords_retireve_time_list = []
+        nebula_retrieve_time_list = []
+        filter_time_list = []
         
         for i in range(len(self.dataset.query)):
-            # if i >= 2:
+            # if i >= 5:
             #     break
             dict_data = {}
             print(f"kg modify id : {i}")
@@ -2290,18 +2319,33 @@ class KGModify:
             logger.log(f"answer: {self.dataset.answer[i]}")
             # res = self.graphrag.chat_without_stream_with_llama_index(self.dataset.query[i], pruning=30)
             dict_data['index'] = i
-            dict_data['query'] = self.dataset.query[i]
+            # dict_data['query'] = self.dataset.query[i]
+            dict_data['question'] = self.dataset.query[i]
             dict_data['answer'] = self.dataset.answer[i] 
             
-            keywords = self.retriver.extract_keywords_with_embedding_find_entity(self.dataset.query[i], self.args.entity) # 问题相似度选
+            keywords, keywords_retireve_time = self.retriver.extract_keywords_with_embedding_find_entity(self.dataset.query[i], self.args.entity) # 问题相似度选
             logger.log(f"keywords : {keywords}")
+            logger.log(f"keywords_retireve_time : {keywords_retireve_time}")
             dict_data['keywords'] = keywords
+            dict_data['keywords_retireve_time'] = keywords_retireve_time
+            keywords_retireve_time_list.append(keywords_retireve_time)
             
-            retrieve_result_2d, retrieve_result_triple_4d, retrieve_result_sentence_2d = self.retriver.retrieve_path_with_keywords_v1_data(self.dataset.query[i], keywords, path_depth = 2, pruning=self.args.pruning)
+            
+            
+            retrieve_result_2d, retrieve_result_triple_4d, retrieve_result_sentence_2d, nebula_retrieve_time, filter_time = self.retriver.retrieve_path_with_keywords_v1_data(self.dataset.query[i], keywords, path_depth = 2, pruning=self.args.pruning)
             dict_data['retrieve_result_2d'] = retrieve_result_2d
+            dict_data['context'] = retrieve_result_2d
             dict_data['retrieve_result_triple_4d'] = retrieve_result_triple_4d
             dict_data['retrieve_result_sentence_2d'] = retrieve_result_sentence_2d
-
+            
+            dict_data['nebula_retrieve_time'] = nebula_retrieve_time
+            dict_data['filter_time'] = filter_time
+            nebula_retrieve_time_list.append(nebula_retrieve_time)
+            filter_time_list.append(filter_time)
+            logger.log(f"retrieve result 2d : {json.dumps(retrieve_result_2d, indent=2)}")
+            logger.log(f"nebula_retrieve_time : {nebula_retrieve_time}")
+            logger.log(f"filter_time : {filter_time}")
+            
             # retrieve_result = [item for sublist in retrieve_result_2d for item in sublist]  # flatten the 2d list to 1d
             lengths = [len(sublist) for sublist in retrieve_result_2d]
             dict_data['entity_path_count'] = lengths  # store the lengths of each sublist
@@ -2317,9 +2361,13 @@ class KGModify:
         logger.log(f"\n\n-----------------------entity_path_count median: {statistics.median(entity_path_count)}-----------------------")
         logger.log(f"\n\n-----------------------query_path_count_avg: {sum(query_path_count)/len(query_path_count)}-----------------------")
         logger.log(f"\n\n-----------------------query_path_count median: {statistics.median(query_path_count)}-----------------------")
+        
+        logger.log(f"\n\n-----------------------keywords_retireve_time_avg: {sum(keywords_retireve_time_list)/len(keywords_retireve_time_list)}-----------------------")
+        logger.log(f"\n\n-----------------------nebula_retrieve_time_avg: {sum(nebula_retrieve_time_list)/len(nebula_retrieve_time_list)}-----------------------")
+        logger.log(f"\n\n-----------------------filter_time_avg: {sum(filter_time_list)/len(filter_time_list)}-----------------------")
 
 
-        with open(f"./logs/stage/{self.args.option}_{self.args.dataset_name}_{self.args.entity}_{self.args.pruning}.json", "w", encoding="utf-8") as f:
+        with open(f"./logs/ragcache/logs/{self.args.option}_{self.args.dataset_name}_{self.args.entity}_{self.args.pruning}.json", "w", encoding="utf-8") as f:
             f.write(json.dumps(data, indent=2))
 
     def graph_rag_baseline_case(self, current_time = None): # 与node不再一致，通过
@@ -4214,7 +4262,6 @@ class KGModify:
         acc_list = []
         acc_list_end = [] # 原图2hop错3hop对，反馈图2hop对
         acc_llm = 0
-        acc_refuse = 0
         delete_relationship_num = 0
         insert_relationship_by_entity_num = 0
         delete_relationship_by_entity_num = 0
@@ -4232,14 +4279,9 @@ class KGModify:
         print(type(self.args.iteration))
         print(f"self.args.iteration: {self.args.iteration}")
         
-        if self.args.iteration == 0:
-            with open(f"./logs/triplets/{self.args.space_name}_{self.args.iteration}.json", "r", encoding="utf-8") as file:
-                triplets_score = json.load(file)
-        else:
-            # with open(f"./logs/triplets/{self.args.space_name}_{self.args.llm_fb_name}_{self.args.algorithm}_{self.args.iteration}.json", "r", encoding="utf-8") as file:
-            #     triplets_score = json.load(file)
-            with open(f"./logs/triplets/{self.args.space_name}_{self.args.iteration}.json", "r", encoding="utf-8") as file:
-                triplets_score = json.load(file)
+
+        with open(f"./logs/{self.args.algorithm}/triplets/{self.args.space_name}_{self.args.iteration}.json", "r", encoding="utf-8") as file:
+            triplets_score = json.load(file)
 
         if self.args.similar: # 这个部分先不动
             if self.args.dataset_name == 'rgb':
@@ -4262,34 +4304,23 @@ class KGModify:
             self.retriver.generate_new_entity_embedding_standard(list(sorted(entities_new)))
         
         # current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        if self.args.similar:
-            logger = Logger(f"./data/{self.args.llmbackend}_{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}")
-        else:
-            logger = Logger(f"./data/{self.args.llmbackend}_{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}")
+        # if self.args.similar:
+        #     logger = Logger(f"./data/{self.args.llmbackend}_{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}")
+        # else:
+        #     logger = Logger(f"./data/{self.args.llmbackend}_{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}")
         
+        # 生成log文件
+        if self.args.similar:
+            logger = Logger(f"./{self.args.algorithm}/data/{self.args.llmbackend}_{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}")
+        else:
+            logger = Logger(f"./{self.args.algorithm}/data/{self.args.llmbackend}_{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}")
+        
+
         self.logger = logger
         self.retriver.triplets_score = triplets_score # 传递给retriver
         
         data_list = []
         data_list_end = []
-        if self.args.dataset_name == 'rgb':
-            # with open(f"/home/zhangyz/RAG_2025/logs/rgb/Meta-Llama-3-8B-Instruct_kg_modify_llama_reproduce_forword_rgb_0.json", 'r', encoding='utf-8') as file:
-            #     data_list = json.load(file)
-            # with open(f"/home/zhangyz/RAG_2025/logs/rgb/Meta-Llama-3-8B-Instruct_kg_modify_llama_reproduce_forword_rgb_5.json", 'r', encoding='utf-8') as file:
-            #     data_list_end = json.load(file)    
-            pass
-        elif self.args.dataset_name == 'hotpotqa600':
-            # with open(f"/home/zhangyz/RAG_2025/logs/hotpotqa600/Meta-Llama-3-8B-Instruct_kg_modify_llama_reproduce_forword_hotpotqa600_0.json", 'r', encoding='utf-8') as file:
-            #     data_list = json.load(file)
-            # with open(f"/home/zhangyz/RAG_2025/logs/hotpotqa600/Meta-Llama-3-8B-Instruct_kg_modify_llama_reproduce_forword_hotpotqa600_6.json", 'r', encoding='utf-8') as file:
-            #     data_list_end = json.load(file)
-            pass
-        else:
-            # data_list = []
-            # data_list_end = []
-            pass
-        # with open(f"/home/zhangyz/RAG_2025/logs/multihop/Meta-Llama-3-8B-Instruct_kg_modify_llama_reproduce_forword_multihop_0.json", 'r', encoding='utf-8') as file:
-        #     data_list = json.load(file) 
 
         forward_total_time = []
         keywords_total_time = []
@@ -4306,13 +4337,15 @@ class KGModify:
         prompt = []
         generate = []
 
+        # self.dataset.query = self.dataset.query[0:4]
+
         for index in range(len(self.dataset.query)):
-            if index >= 1: 
-                break
+            # if index >= 1: 
+            #     break
             # if index <= 165:
             #     continue
-            if data_list and data_list[index]['label']:
-                continue
+            # if data_list and data_list[index]['label']:
+            #     continue
             # if len(acc_list) > 0:
             #     break
             forward_start_time = time.perf_counter()
@@ -4368,17 +4401,18 @@ class KGModify:
             if self.args.graphrag_response == "basic":
                 response_one, num_input_tokens, response_time = self.graphrag.chat_without_stream_with_triplets(self.dataset.query[index], filtered_retrieve_result)
             elif self.args.graphrag_response == "basic_shared_prefix" :
-                response_one, num_input_tokens, generate_len, response_time, generate_time, prefill_time, decode_time, wait_scheduled_time = self.graphrag.chat_without_stream_with_triplets_shared_prefix(self.dataset.query[index], filtered_retrieve_result)
-                generate.append(generate_len)
-                forward_generate_time_total.append(generate_time)
-                forward_prefill_time_total.append(prefill_time)
-                forward_decode_time_total.append(decode_time)
-                forward_wait_scheduled_time_total.append(wait_scheduled_time)
-                logger.log(f"generate_len: {generate_len}")
-                logger.log(f"generate_time: {generate_time} seconds")
-                logger.log(f"prefill_time: {prefill_time} seconds")
-                logger.log(f"decode_time: {decode_time} seconds")
-                logger.log(f"wait_scheduled_time: {wait_scheduled_time} seconds")
+                # response_one, num_input_tokens, generate_len, response_time, generate_time, prefill_time, decode_time, wait_scheduled_time = self.graphrag.chat_without_stream_with_triplets_shared_prefix(self.dataset.query[index], filtered_retrieve_result)
+                response_one, num_input_tokens, response_time= self.graphrag.chat_without_stream_with_triplets_shared_prefix(self.dataset.query[index], filtered_retrieve_result)
+                # generate.append(generate_len)
+                # forward_generate_time_total.append(generate_time)
+                # forward_prefill_time_total.append(prefill_time)
+                # forward_decode_time_total.append(decode_time)
+                # forward_wait_scheduled_time_total.append(wait_scheduled_time)
+                # logger.log(f"generate_len: {generate_len}")
+                # logger.log(f"generate_time: {generate_time} seconds")
+                # logger.log(f"prefill_time: {prefill_time} seconds")
+                # logger.log(f"decode_time: {decode_time} seconds")
+                # logger.log(f"wait_scheduled_time: {wait_scheduled_time} seconds")
 
             response_total_time.append(response_time)
             num_input_tokens_avg.append(num_input_tokens)
@@ -4481,19 +4515,17 @@ class KGModify:
         if generate:
             logger.log(f"\n\n-----------------------generate tokens avg: {sum(generate)/len(generate)}-----------------------")
         logger.log(f"\n\n-----------------------accuracy llm: {acc_llm/query_number}-----------------------")
-        logger.log(f"\n\n-----------------------Probability of rejection: {acc_refuse/query_number}-----------------------")
-
         logger.log(f"\n\n-----------------------forward_total_time: {sum(forward_total_time)/len(forward_total_time)}-----------------------")
         
         logger.log(f"\n\n-----------------------keywords_total_time: {sum(keywords_total_time)/len(keywords_total_time)}-----------------------")
         logger.log(f"\n\n-----------------------nebula retrieve_total_time: {sum(nebula_retrieve_total_time)/len(nebula_retrieve_total_time)}-----------------------")
         logger.log(f"\n\n-----------------------filter retrieve_total_time: {sum(filter_retrieve_total_time)/len(filter_retrieve_total_time)}-----------------------")
         logger.log(f"\n\n-----------------------response_total_time: {sum(response_total_time)/len(response_total_time)}-----------------------")
-        if forward_generate_time_total:
-            logger.log(f"\n\n-----------------------forward_generate_time_total: {sum(forward_generate_time_total)/len(forward_generate_time_total)}-----------------------")
-            logger.log(f"\n\n-----------------------forward_prefill_time_total: {sum(forward_prefill_time_total)/len(forward_prefill_time_total)}-----------------------")
-            logger.log(f"\n\n-----------------------forward_decode_time_total: {sum(forward_decode_time_total)/len(forward_decode_time_total)}-----------------------")
-            logger.log(f"\n\n-----------------------forward_wait_scheduled_time_total: {sum(forward_wait_scheduled_time_total)/len(forward_wait_scheduled_time_total)}-----------------------")
+        # if forward_generate_time_total:
+        #     logger.log(f"\n\n-----------------------forward_generate_time_total: {sum(forward_generate_time_total)/len(forward_generate_time_total)}-----------------------")
+        #     logger.log(f"\n\n-----------------------forward_prefill_time_total: {sum(forward_prefill_time_total)/len(forward_prefill_time_total)}-----------------------")
+        #     logger.log(f"\n\n-----------------------forward_decode_time_total: {sum(forward_decode_time_total)/len(forward_decode_time_total)}-----------------------")
+        #     logger.log(f"\n\n-----------------------forward_wait_scheduled_time_total: {sum(forward_wait_scheduled_time_total)/len(forward_wait_scheduled_time_total)}-----------------------")
 
 
         logger.log(f"\n\n-----------------------acc_list_end: {len(acc_list_end)} --- {acc_list_end} -----------------------")
@@ -4508,10 +4540,10 @@ class KGModify:
         # logger.log(f"\n\n-----------------------delete_entity_num: {delete_entity_num}-----------------------")
 
         if self.args.similar:
-            with open(f"./logs/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}.json", "w", encoding="utf-8") as f:
+            with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}.json", "w", encoding="utf-8") as f:
                 f.write(json.dumps(forward_data, indent=2))
         else:
-            with open(f"./logs/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}.json", "w", encoding="utf-8") as f:
+            with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}.json", "w", encoding="utf-8") as f:
                 f.write(json.dumps(forward_data, indent=2))
 
     def retrieve_path_with_keywords_module(self, method, question, keywords = [], path_depth = 2, pruning = 10, threshold=0.55, score_threshold = 71, score_weight = 0.5, top_k_per_entity = True, build_node = False):
@@ -4519,9 +4551,10 @@ class KGModify:
             return self.retriver.retrieve_path_with_keywords_basic(question, keywords, path_depth, pruning, threshold, score_threshold, build_node)
         elif method == 'standard':
             return self.retriver.retrieve_path_with_keywords_standard(question, keywords, path_depth, pruning, score_weight, top_k_per_entity, build_node)
-
+    # 冗余处理
     def redundant_process(self, method, filtered_triple_3d, index):
         redundancy_start_time = time.perf_counter()
+        delete_list = []
         if method == 'basic_only_relationship_strict':
             if filtered_triple_3d and len(filtered_triple_3d)> 1:
                     redundant_relationship_3d, relationship_group_sentence = self.retriver.find_redundant_relationship_by_entity(filtered_triple_3d)
@@ -4550,9 +4583,9 @@ class KGModify:
                     # self.logger.log(f"delete_relationship_str:\n {delete_relationship_str}")
                     self.logger.log(f"delete_relationship_list:\n {json.dumps(delete_relationship_list, indent=2)}")
                     
-                    for triple in delete_list: # 即时修改
+                    for triple in delete_list: # 即时修改 这个时候已经全部检索完成已经不影响了
                         sentence = f"{triple[0]} {triple[1]} {triple[2]}"
-                        value = self.triplets_score.pop(sentence, {})
+                        value = self.triplets_score_modify.pop(sentence, {})
                         if not value:
                             self.logger.log(f"{sentence}(delete by relationship) not exist in triple_score!")
                 else:
@@ -4949,8 +4982,8 @@ class KGModify:
                             grad_weight += grad_weight_t
                             # self.logger.log(f"sentence_s: {sentence_s}, sim: {sim_map.get(sentence_s, 0)}, score: {score_map.get(sentence_s, 0)}, grad_weight_t: {grad_weight_t}, grand_weight: {grad_weight}")
                             
-                            if sentence in self.triplets_score:
-                                old_score = self.triplets_score[sentence]['score']
+                            if sentence in self.triplets_score_modify:
+                                old_score = self.triplets_score_modify[sentence]['score']
                                 # if flag_TF:
                                 #     isNegative = 1
                                 # else:
@@ -4960,7 +4993,7 @@ class KGModify:
                                     new_score = self.args.score_max
                                 if new_score < self.args.score_min:
                                     new_score = self.args.score_min
-                                self.triplets_score[sentence]['score'] = new_score
+                                self.triplets_score_modify[sentence]['score'] = new_score
                                 self.logger.log(f" {sentence}, old score: {old_score}, grad: {grad_t}, new score : {new_score}")
                             else:
                                 self.logger.log(f" {sentence}, the retrival result don't exit in triplets score &&&&&")
@@ -5028,6 +5061,59 @@ class KGModify:
 
             if feedback_noise:
                 flag_TF = not flag_TF
+                self.logger.log(f"----------------feedback_noise-------------: original: {not flag_TF}, now: {flag_TF}")
+            if response_dict['Insufficient_information']:
+                self.logger.log(f"Insufficient_information is True, no feedback processed.")
+                pass
+            elif response_dict['No_feedback']:
+                self.logger.log(f"No_feedback is True, no feedback processed.")
+            else:
+                penalty_multiplier = -5 if feedback_noise else 5
+                for idx, (h, r, t) in enumerate(triplet_unique_list, start=0):
+                    if idx in response_dict['correct_numbers']:
+                        score = response_dict['correct_numbers'][idx] * penalty_multiplier
+                        sentence = f"{h} {r} {t}"
+                        if sentence in self.triplets_score_modify:
+                            old_score = self.triplets_score_modify[sentence]['score']
+                            new_score = old_score + score
+                            if new_score > self.args.score_max:
+                                new_score = self.args.score_max
+                            if new_score < self.args.score_min:
+                                new_score = self.args.score_min
+                            self.triplets_score_modify[sentence]['score'] = new_score
+                            self.logger.log(f" {sentence}, old score: {old_score}, new score : {new_score}")
+                        else:
+                            self.logger.log(f" {sentence}, the retrival result don't exit in triplets score &&&&&")
+                    elif idx in response_dict['error_numbers']:
+                        score = response_dict['error_numbers'][idx] * penalty_multiplier
+                        sentence = f"{h} {r} {t}"
+                        if sentence in self.triplets_score_modify:
+                            old_score = self.triplets_score_modify[sentence]['score']
+                            new_score = old_score - score
+                            if new_score > self.args.score_max:
+                                new_score = self.args.score_max
+                            if new_score < self.args.score_min:
+                                new_score = self.args.score_min
+                            self.triplets_score_modify[sentence]['score'] = new_score
+                            self.logger.log(f" {sentence}, old score: {old_score}, new score : {new_score}")
+                        else:
+                            self.logger.log(f" {sentence}, the retrival result don't exit in triplets score &&&&&")
+                            
+        elif method == "leaderboardStrategy_abaltion":
+            # 此时 filtered_retrieve_result 是 triplet_unique
+            score_weight = args_param.score_weight
+
+            triplet_unique_list = []
+            context = ""
+            for idx, (h, r, t) in enumerate(filtered_retrieve_result, start=0):
+                context += f"Path {idx}:\t{h} {r.replace('_',' ')} {t}\n"
+                triplet_unique_list.append((h, r, t))
+                            
+            self.logger.log(f"triplet unique:\n{context}")
+            self.logger.log(f"{json.dumps(response_dict, indent=2)}")
+
+            if feedback_noise:
+                flag_TF = not flag_TF
                 print(f"----------------feedback_noise-------------: original: {not flag_TF}, now: {flag_TF}")
             if response_dict['Insufficient_information']:
                 self.logger.log(f"Insufficient_information is True, no feedback processed.")
@@ -5036,35 +5122,21 @@ class KGModify:
                 self.logger.log(f"No_feedback is True, no feedback processed.")
             else:
                 for idx, (h, r, t) in enumerate(triplet_unique_list, start=0):
-                    if idx in response_dict['correct_numbers']:
-                        score = response_dict['correct_numbers'][idx] * 5
+                    if idx in response_dict['feedback_numbers']:
+                        score = response_dict['feedback_numbers'][idx]
                         sentence = f"{h} {r} {t}"
-                        if sentence in self.triplets_score:
-                            old_score = self.triplets_score[sentence]['score']
+                        if sentence in self.triplets_score_modify:
+                            old_score = self.triplets_score_modify[sentence]['score']
                             new_score = old_score + score
                             if new_score > self.args.score_max:
                                 new_score = self.args.score_max
                             if new_score < self.args.score_min:
                                 new_score = self.args.score_min
-                            self.triplets_score[sentence]['score'] = new_score
+                            self.triplets_score_modify[sentence]['score'] = new_score
                             self.logger.log(f" {sentence}, old score: {old_score}, new score : {new_score}")
                         else:
                             self.logger.log(f" {sentence}, the retrival result don't exit in triplets score &&&&&")
-                    elif idx in response_dict['error_numbers']:
-                        score = response_dict['error_numbers'][idx] * 5
-                        sentence = f"{h} {r} {t}"
-                        if sentence in self.triplets_score:
-                            old_score = self.triplets_score[sentence]['score']
-                            new_score = old_score - score
-                            if new_score > self.args.score_max:
-                                new_score = self.args.score_max
-                            if new_score < self.args.score_min:
-                                new_score = self.args.score_min
-                            self.triplets_score[sentence]['score'] = new_score
-                            self.logger.log(f" {sentence}, old score: {old_score}, new score : {new_score}")
-                        else:
-                            self.logger.log(f" {sentence}, the retrival result don't exit in triplets score &&&&&")
-
+                    
 
     def evolve_basic_feedback(self):
 
@@ -5092,41 +5164,38 @@ class KGModify:
         min_score_avg = []
         median_score_avg = []
         mean_score_avg = []
-        
-        if self.args.iteration == 0:
-            with open(f"./logs/triplets/{self.args.space_name}_{self.args.iteration}.json", "r", encoding="utf-8") as file:
-                triplets_score = json.load(file)
-        else:
-            # with open(f"./logs/triplets/{self.args.space_name}_{self.args.option}_{self.args.llm}_{self.args.algorithm}_{self.args.iteration}.json", "r", encoding="utf-8") as file:
-            #     triplets_score = json.load(file)
-            with open(f"./logs/triplets/{self.args.space_name}_{self.args.iteration}.json", "r", encoding="utf-8") as file:
-                triplets_score = json.load(file)
+    
+
+        # 读取三元组分数
+        with open(f"./logs/{self.args.algorithm}/triplets/{self.args.space_name}_{self.args.iteration}.json", "r", encoding="utf-8") as file:
+            triplets_score = json.load(file)
             
         current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
         if self.args.similar:
-            with open(f"./logs/stage/{self.args.forward_llm}_evolve_basic_forward_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}.json", 'r', encoding='utf-8') as file:
+            with open(f"./logs/{self.args.algorithm}/stage/{self.args.forward_llm}_evolve_basic_forward_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}.json", 'r', encoding='utf-8') as file:
                 data_list = json.load(file) 
         else:
-            with open(f"./logs/stage/{self.args.forward_llm}_evolve_basic_forward_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}.json", 'r', encoding='utf-8') as file:
+            with open(f"./logs/{self.args.algorithm}/stage/{self.args.forward_llm}_evolve_basic_forward_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}.json", 'r', encoding='utf-8') as file:
                 data_list = json.load(file)
 
         if self.args.similar:
-            logger = Logger(f"./data/{self.args.llmbackend}_{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}")
+            logger = Logger(f"./{self.args.algorithm}/data/{self.args.llmbackend}_{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}")
         else:
-            logger = Logger(f"./data/{self.args.llmbackend}_{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}")
+            logger = Logger(f"./{self.args.algorithm}/data/{self.args.llmbackend}_{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}")
 
         self.logger = logger
         self.triplets_score = triplets_score
         self.retriver.triplets_score = triplets_score # 传递给retriver
+        self.triplets_score_modify = copy.deepcopy(triplets_score) # leaderboardStrategy专用
 
         if self.args.iteration == 0:
             feedback_random_last = []
         else:
-            with open(f"./logs/data/{self.args.space_name}_error_feedback_random_{self.args.iteration-1}.json", 'r', encoding='utf-8') as file:
+            with open(f"./logs/{self.args.algorithm}/stage/{self.args.space_name}_error_feedback_random_{self.args.iteration-1}.json", 'r', encoding='utf-8') as file:
                 feedback_random_last = json.load(file)
         feedback_noise = self.select_10_percent(len(data_list), self.args.rate, feedback_random_last)
-        with open(f"./logs/data/{self.args.space_name}_error_feedback_random_{self.args.iteration}.json", 'w', encoding='utf-8') as file:
+        with open(f"./logs/{self.args.algorithm}/stage/{self.args.space_name}_error_feedback_random_{self.args.iteration}.json", 'w', encoding='utf-8') as file:
              file.write(json.dumps(feedback_noise, indent=2))
         logger.log(f"-------------feedback_noise last (rate: {self.args.rate}): {feedback_random_last}")
         logger.log(f"-------------feedback_noise (rate: {self.args.rate}): {feedback_noise}")
@@ -5144,6 +5213,12 @@ class KGModify:
         feedback_end2end_time_total = []
         prompt = []
         generate = []
+        
+        feedback_prompt = []
+        feedback_response_total_time = []
+
+        # data_list = data_list[:10]
+
         for index in range(len(data_list)):
             # if index >= 10: 
             #     break
@@ -5186,6 +5261,26 @@ class KGModify:
 
             response_one = data_list[index]['response']
             self.response.append(response_one)
+            
+            # 一跳三元组
+            seen = set()
+            triplet_unique = []   
+            for path_triple in filtered_triple_3d:
+                for triple in path_triple:
+                    h, r, t, direction = triple
+
+                    if direction == '->':
+                        head, tail = h, t
+                    elif direction == '<-':
+                        head, tail = t, h
+                    else:
+                        continue
+                    sentence_text = f"{head} {r.replace('_', ' ')} {tail}"
+                    if sentence_text in seen:
+                        continue
+                    seen.add(sentence_text)
+                    triplet_unique.append((head, r, tail))
+            triplet_unique.sort(key=lambda x: (x[0], x[2])) 
 
             # 处理冗余
             if self.args.redundancy:
@@ -5204,30 +5299,68 @@ class KGModify:
             else:
                 logger.log(f"-------------graph rag response false ~~~~~")
                 acc_list.append(0)
+                
+            # 反馈问答
+            if self.args.feedback_process == 'standard_for_path_shared_prefix':
+                feedback_response, prompt_len, feedback_response_time = self.graphrag.chat_without_stream_for_socre_feedback_standard_shared_prefix(data_list[index]['query'], data_list[index]['response'], filtered_retrieve_result)
+            elif self.args.feedback_process == "basic_for_triplet_shared_prefix":
+                feedback_response, prompt_len, feedback_response_time = self.graphrag.chat_without_stream_for_socre_feedback_basic_shared_prefix(data_list[index]['query'], data_list[index]['response'], triplet_unique)
+            elif self.args.feedback_process == "leaderboardStrategy":
+                feedback_response, prompt_len, feedback_response_time = self.graphrag.chat_without_stream_for_leaderboardStrategy_feedback_shared_prefix(data_list[index]['query'], data_list[index]['response'], triplet_unique, data_list[index]['label'])
+
+            data_list[index]['feedback_response'] = feedback_response
+            data_list[index]['feedback_prompt_tokens'] = prompt_len
+            data_list[index]['feedback_response_time'] = feedback_response_time
+            feedback_prompt.append(prompt_len)
+            feedback_response_total_time.append(feedback_response_time)
+
+            logger.log(f"feedback response time for batch: {feedback_response_time} seconds")
             
             # 反馈处理
             # feedback_process_time =  self.feedback_process(method=self.args.feedback_process, filtered_retrieve_result = filtered_retrieve_result, filtered_triple_3d = filtered_triple_3d, flag_TF = flag_TF, index = index, feedback_noise=feedback_noise, question=data_list[index]['query'], response=response_one, filtered_probs=filtered_probs, filtered_dict=filtered_dict, pt_list_standard=pt_list_standard, score_weight = self.args.score_weight, lr=self.args.lr, sim_map=sim_map, score_map = score_map)
-            if self.args.feedback_process == 'standard_for_path_shared_prefix':
-                prompt_len, generate_len, llm_feedback_time, generate_time, prefill_time, decode_time, wait_scheduled_time, feedback_process_time =  self.feedback_process(method=self.args.feedback_process, filtered_retrieve_result = filtered_retrieve_result, filtered_triple_3d = filtered_triple_3d, flag_TF = flag_TF, index = index, feedback_noise=feedback_noise, question=data_list[index]['query'], response=response_one, filtered_probs=filtered_probs, filtered_dict=filtered_dict, pt_list_standard=pt_list_standard, args_param = self.args, sim_map=sim_map, score_map = score_map)
-                prompt.append(prompt_len)
-                generate.append(generate_len)
-                feedback_generate_time_total.append(generate_time)
-                feedback_prefill_time_total.append(prefill_time)
-                feedback_decode_time_total.append(decode_time)
-                feedback_wait_scheduled_time_total.append(wait_scheduled_time)
-                logger.log(f"prompt_len: {prompt_len}")
-                logger.log(f"generate_len: {generate_len}")
-                logger.log(f"generate_time: {generate_time}")
-                logger.log(f"prefill_time: {prefill_time}")
-                logger.log(f"decode_time: {decode_time}")
-                logger.log(f"wait_scheduled_time: {wait_scheduled_time}")
+            # if self.args.feedback_process == 'standard_for_path_shared_prefix':
+            #     prompt_len, generate_len, llm_feedback_time, generate_time, prefill_time, decode_time, wait_scheduled_time, feedback_process_time =  self.feedback_process(method=self.args.feedback_process, filtered_retrieve_result = filtered_retrieve_result, filtered_triple_3d = filtered_triple_3d, flag_TF = flag_TF, index = index, feedback_noise=feedback_noise, question=data_list[index]['query'], response=response_one, filtered_probs=filtered_probs, filtered_dict=filtered_dict, pt_list_standard=pt_list_standard, args_param = self.args, sim_map=sim_map, score_map = score_map)
+            #     prompt.append(prompt_len)
+            #     generate.append(generate_len)
+            #     feedback_generate_time_total.append(generate_time)
+            #     feedback_prefill_time_total.append(prefill_time)
+            #     feedback_decode_time_total.append(decode_time)
+            #     feedback_wait_scheduled_time_total.append(wait_scheduled_time)
+            #     logger.log(f"prompt_len: {prompt_len}")
+            #     logger.log(f"generate_len: {generate_len}")
+            #     logger.log(f"generate_time: {generate_time}")
+            #     logger.log(f"prefill_time: {prefill_time}")
+            #     logger.log(f"decode_time: {decode_time}")
+            #     logger.log(f"wait_scheduled_time: {wait_scheduled_time}")
                 
-            else:
-                llm_feedback_time, feedback_process_time =  self.feedback_process(method=self.args.feedback_process, filtered_retrieve_result = filtered_retrieve_result, filtered_triple_3d = filtered_triple_3d, flag_TF = flag_TF, index = index, feedback_noise=feedback_noise, question=data_list[index]['query'], response=response_one, filtered_probs=filtered_probs, filtered_dict=filtered_dict, pt_list_standard=pt_list_standard, args_param = self.args, sim_map=sim_map, score_map = score_map)
+            # else:
+            #     llm_feedback_time, feedback_process_time =  self.feedback_process(method=self.args.feedback_process, filtered_retrieve_result = filtered_retrieve_result, filtered_triple_3d = filtered_triple_3d, flag_TF = flag_TF, index = index, feedback_noise=feedback_noise, question=data_list[index]['query'], response=response_one, filtered_probs=filtered_probs, filtered_dict=filtered_dict, pt_list_standard=pt_list_standard, args_param = self.args, sim_map=sim_map, score_map = score_map)
             
-            llm_feedback_total_time.append(llm_feedback_time)
+            
+            if self.args.feedback_process == 'standard_for_path_shared_prefix' or self.args.feedback_process == 'basic_for_triplet_shared_prefix' or self.args.feedback_process == "leaderboardStrategy":
+                feedback_process_start_time = time.perf_counter()
+                self.feedback_process_one(
+                    method = self.args.feedback_process,
+                    filtered_retrieve_result = filtered_retrieve_result if self.args.feedback_process == "standard_for_path_shared_prefix" else triplet_unique,
+                    response_dict = feedback_response,
+                    filtered_triple_3d = filtered_triple_3d,
+                    flag_TF = data_list[index]['label'], 
+                    feedback_noise = index in feedback_noise, 
+                    filtered_probs = filtered_probs, 
+                    filtered_dict = filtered_dict, 
+                    pt_list_standard = pt_list_standard, 
+                    args_param = self.args, 
+                    sim_map = sim_map, 
+                    score_map = score_map,)
+                feedback_process_end_time = time.perf_counter()
+                feedback_process_time = feedback_process_end_time - feedback_process_start_time
+                logger.log(f"feedback_process_time: {feedback_process_time} seconds")
+                feedback_process_total_time.append(feedback_process_time)
+            
+            
+            llm_feedback_total_time.append(feedback_response_time)
             feedback_process_total_time.append(feedback_process_time)
-            logger.log(f"llm_feedback_time: {llm_feedback_time} seconds")
+            logger.log(f"llm_feedback_time: {feedback_response_time} seconds")
             logger.log(f"feedback_process_time: {feedback_process_time} seconds")
             # assert False
             feedback_end_time = time.perf_counter()
@@ -5293,60 +5426,65 @@ class KGModify:
         logger.log(f"\n\n-----------------------accuracy: {acc/query_number}-----------------------")
         logger.log(f"\n\n-----------------------accuracy llm: {acc_llm/query_number}-----------------------")
 
-        logger.log(f"\n\n-----------------------prompt len: {sum(prompt)/len(prompt)}-----------------------")
-        logger.log(f"\n\n-----------------------generate len: {sum(generate)/len(generate)}-----------------------")
-        
-
-        logger.log(f"\n\n-----------------------feedback_total_time: {sum(feedback_total_time)/len(feedback_total_time)}-----------------------")
+        logger.log(f"\n\n-----------------------feedback prompt len: {sum(feedback_prompt)/len(feedback_prompt)}-----------------------")
+        # logger.log(f"\n\n-----------------------generate len: {sum(generate)/len(generate)}-----------------------")
 
         if self.args.redundancy:
-            logger.log(f"\n\n-----------------------redundancy_total_time: {sum(redundancy_total_time)/len(redundancy_total_time)}-----------------------")
-        logger.log(f"\n\n-----------------------llm_feedback_total_time: {sum(llm_feedback_total_time)/len(llm_feedback_total_time)}-----------------------")
-        if feedback_generate_time_total:
-            logger.log(f"\n\n-----------------------feedback generate time: {sum(feedback_generate_time_total)/len(feedback_generate_time_total)}-----------------------")
-            logger.log(f"\n\n-----------------------feedback prefill time: {sum(feedback_prefill_time_total)/len(feedback_prefill_time_total)}-----------------------")
-            logger.log(f"\n\n-----------------------feedback decode time: {sum(feedback_decode_time_total)/len(feedback_decode_time_total)}-----------------------")
-            logger.log(f"\n\n-----------------------feedback wait scheduled time: {sum(feedback_wait_scheduled_time_total)/len(feedback_wait_scheduled_time_total)}-----------------------")
-
+            logger.log(f"\n\n-----------------------avg_delete_relationship_num: {sum(delete_relationship_num)/len(delete_relationship_num)}-----------------------")
+            logger.log(f"\n\n-----------------------avg redundancy_total_time: {sum(redundancy_total_time)/len(redundancy_total_time)}-----------------------")
         logger.log(f"\n\n-----------------------feedback_process_total_time: {sum(feedback_process_total_time)/len(feedback_process_total_time)}-----------------------")
-
+        logger.log(f"\n\n-----------------------llm_feedback_total_time: {sum(llm_feedback_total_time)/len(llm_feedback_total_time)}-----------------------")
+        logger.log(f"\n\n-----------------------feedback_total_time: {sum(feedback_total_time)/len(feedback_total_time)}-----------------------")
+        # if feedback_generate_time_total:
+        #     logger.log(f"\n\n-----------------------feedback generate time: {sum(feedback_generate_time_total)/len(feedback_generate_time_total)}-----------------------")
+        #     logger.log(f"\n\n-----------------------feedback prefill time: {sum(feedback_prefill_time_total)/len(feedback_prefill_time_total)}-----------------------")
+        #     logger.log(f"\n\n-----------------------feedback decode time: {sum(feedback_decode_time_total)/len(feedback_decode_time_total)}-----------------------")
+        #     logger.log(f"\n\n-----------------------feedback wait scheduled time: {sum(feedback_wait_scheduled_time_total)/len(feedback_wait_scheduled_time_total)}-----------------------")
+        
 
         # logger.log(f"\n\n-----------------------delete_relationship_num: {sum(delete_relationship_num)/len(delete_relationship_num)}-----------------------")
         # logger.log(f"\n\n-----------------------delete_relationship_by_entity_num: {delete_relationship_by_entity_num}-----------------------")
-
         # with open(f"./logs/triplets/{self.args.space_name}_{self.args.llm}_{self.args.algorithm}_{self.args.iteration+1}.json", "w", encoding="utf-8") as file:
         #     json.dump(self.triplets_score, file, ensure_ascii=False, indent=2)
-        with open(f"./logs/triplets/{self.args.space_name}_{self.args.iteration+1}.json", "w", encoding="utf-8") as file:
-            json.dump(self.triplets_score, file, ensure_ascii=False, indent=2)
+        
+        if self.args.similar:
+            with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}.json", "w", encoding="utf-8") as f:
+                f.write(json.dumps(data_list, indent=2))
+        else:
+            with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}.json", "w", encoding="utf-8") as f:
+                f.write(json.dumps(data_list, indent=2))
+                
+        with open(f"./logs/{self.args.algorithm}/triplets/{self.args.space_name}_{self.args.iteration+1}.json", "w", encoding="utf-8") as file:
+            json.dump(self.triplets_score_modify, file, ensure_ascii=False, indent=2)
     
 
-    def evolve_batch(self):
+    def ensure_stage_output_dir(self, algorithm: str, stages: str = ["stage", "output", "data"]) -> str:
+        """
+        确保stage output data目录存在
+        
+        Args:
+            base_logs_dir: 基础日志目录路径（如：./logs）
+            algorithm: 算法名称
+            stage_name: 可选的stage名称，如果为None则只创建算法目录
+            
+        Returns:
+            创建的目录路径
+        """
+        for stage_name in stages:
+            dir_path = Path("./logs") / algorithm / stage_name
+            dir_path.mkdir(parents=True, exist_ok=True)
+        
+        print(f"✓ Ensure the target path exists: {dir_path}")
+    
+    def llm_batch(self):
+        
+        print(f"llm_batch batch_size: {self.args.batch_size}")
 
-        print(f"evolve_basic iteration: {self.args.iteration} batch_size: {self.args.batch_size}")
-        # assert False
-
-        # load score
+        self.ensure_stage_output_dir(algorithm=self.args.algorithm)
 
         acc_list = []
-        acc_list_end = []
-        acc_llm = 0
-        acc_refuse = 0
-        delete_relationship_num = 0
-        insert_relationship_by_entity_num = 0
-        delete_relationship_by_entity_num = 0
-        delete_entity_num = 0
         data = []
         labels_list = []
-
-        print(type(self.args.iteration))
-        print(f"self.args.iteration: {self.args.iteration}")
-        
-        # 读取三元组分数
-        
-        with open(f"./logs/{self.args.algorithm}/triplets/{self.args.space_name}_{self.args.iteration}.json", "r", encoding="utf-8") as file:
-            triplets_score = json.load(file)
-
-        
 
         # 是否使用相似问题
         if self.args.similar:
@@ -5360,16 +5498,6 @@ class KGModify:
                 with open("./dataset/hotpotqa_graph/similar_questions_api_best.json", 'r', encoding='utf-8') as f:
                     self.dataset.query = json.load(f)
         
-        # 是否重新生成嵌入文件 未启用
-        if self.args.shouldRebuildDatabase:
-            # 这轮开始重新生成嵌入
-            entities_new = set()
-            for value in triplets_score.values():
-                if value['score'] > self.args.scoreThreshold:
-                    entities_new.add(value['triplet'][0])
-                    entities_new.add(value['triplet'][2])
-            self.retriver.generate_new_entity_embedding_standard(list(sorted(entities_new)))
-        
         # current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         # 生成log文件
         if self.args.similar:
@@ -5377,15 +5505,12 @@ class KGModify:
         else:
             logger = Logger(f"./{self.args.algorithm}/data/{self.args.llmbackend}_{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}")
         
+
         self.logger = logger
-        self.retriver.triplets_score = triplets_score # 传递给retriver
-        self.retriver.logger = logger # 传递给retriver
-        self.triplets_score = triplets_score
-    
-        delete_relationship_num = []
-        keywords_total_time = []
-        nebula_retrieve_total_time = []
-        filter_retrieve_total_time = []
+        # self.retriver.triplets_score = triplets_score # 传递给retriver
+        # self.retriver.logger = logger # 传递给retriver
+        # self.triplets_score = triplets_score
+
         forward_response_total_time = []
         feedback_response_total_time = []
         forward_prompt = []
@@ -5393,22 +5518,8 @@ class KGModify:
         feedback_process_total_time = []
         feedback_prompt = []
 
-        
-        # self.dataset.query = self.dataset.query[0:len(self.dataset.query)]
         # self.dataset.query = self.dataset.query[0:10]
-        data = []
 
-        # 加噪声
-        if self.args.iteration == 0:
-            feedback_random_last = []
-        else:
-            with open(f"./logs/{self.args.algorithm}/stage/{self.args.space_name}_error_feedback_random_{self.args.iteration-1}.json", 'r', encoding='utf-8') as file:
-                feedback_random_last = json.load(file)
-        feedback_noise = self.select_10_percent(len(self.dataset.query), self.args.rate, feedback_random_last)
-        with open(f"./logs/{self.args.algorithm}/stage/{self.args.space_name}_error_feedback_random_{self.args.iteration}.json", 'w', encoding='utf-8') as file:
-             file.write(json.dumps(feedback_noise, indent=2))
-        logger.log(f"-------------feedback_noise last (rate: {self.args.rate}): {feedback_random_last}")
-        logger.log(f"-------------feedback_noise (rate: {self.args.rate}): {feedback_noise}")
 
         for batch_idx, start_index in enumerate(range(0, len(self.dataset.query), self.args.batch_size)):
             end_index = min(start_index + self.args.batch_size, len(self.dataset.query))
@@ -5429,88 +5540,11 @@ class KGModify:
                 query_list.append(self.dataset.query[index])
                 data[index]['answer'] = self.dataset.answer[index]
 
-            # 实体检索
-            keywords_list, keyword_time = self.retriver.extract_keywords_with_embedding_find_entity(query_list, self.args.entity) # 问题相似度选 10
-            for i, index in enumerate(range(start_index, end_index)):
-                data[index]['keywords'] = keywords_list[i]
-                data[index]['keyword_time'] = keyword_time/len(keywords_list)
-            
-            logger.log(f"keywords extraction time for batch: {keyword_time} seconds")   
-            keywords_total_time.append(keyword_time)
-
-            # 路径检索
-            nebula_retrieve_batch_time = 0
-            filter_retrieve_batch_time = 0
-            filtered_retrieve_result_batch = []
-            filtered_triple_3d_batch = []
-            triplet_unique_batch = []
-            for i, index in enumerate(range(start_index, end_index)):
-                if self.args.retrieve_path == 'basic':
-                    filtered_retrieve_result, filtered_triple_3d, nebula_retrieve_time, filter_retrieve_time  = self.retrieve_path_with_keywords_module(method = self.args.retrieve_path, question=self.dataset.query[index], keywords=data[index]['keywords'], path_depth = self.args.hop, pruning=self.args.pruning, threshold=self.args.simThreshold, score_threshold = self.args.scoreThreshold, score_weight = self.args.score_weight, top_k_per_entity=self.args.top_k_per_entity) # 10*30
-
-                    data[index]['filtered_retrieve_result'] = filtered_retrieve_result # 给大模型的句子，带symbol
-                    data[index]['filtered_triple_3d'] = filtered_triple_3d # 带symbol len = 4
-                    data[index]['filtered_probs'] = []
-                    data[index]['filtered_dict'] = []
-                    data[index]['pt_list_standard'] = []
-                    data[index]['sim_map'] = []
-                    data[index]['score_map'] = []
-                    # 一些用于分析的指标
-                    # logger.log(f"len(triple_result) : {len(triple_result)}")
-                    # logger.log(f"max_score: {max_score}, min_score: {min_score}, median_score: {median_score}, mean_score: {mean_score}")
-                    # triple_result_average += len(triple_result)
-                    
-                elif self.args.retrieve_path == 'standard':
-                    filtered_retrieve_result, filtered_triple_3d, filtered_probs, filtered_dict, pt_list_standard, sim_map, score_map, nebula_retrieve_time, filter_retrieve_time = self.retrieve_path_with_keywords_module(method = self.args.retrieve_path, question=self.dataset.query[index], keywords=data[index]['keywords'], path_depth = self.args.hop, pruning=self.args.pruning, threshold=self.args.simThreshold, score_threshold = self.args.scoreThreshold, score_weight = self.args.score_weight, top_k_per_entity=self.args.top_k_per_entity) # 10*30
-                    data[index]['filtered_retrieve_result'] = filtered_retrieve_result # 给大模型的句子，带symbol
-                    data[index]['filtered_triple_3d'] = filtered_triple_3d # 带symbol len = 4
-                    data[index]['filtered_probs'] = filtered_probs
-                    data[index]['filtered_dict'] = filtered_dict
-                    data[index]['pt_list_standard'] = pt_list_standard
-                    data[index]['sim_map'] = sim_map
-                    data[index]['score_map'] = score_map
-                    
-                    # logger.log(f"filtered_probs : {json.dumps(filtered_probs, indent=2)}")
-                    # logger.log(f"filtered_dict : {json.dumps(filtered_dict, indent=2)}")
-                    # logger.log(f"pt_list_standard : {json.dumps(pt_list_standard, indent=2)}")
-
-                # 一跳三元组
-                seen = set()
-                triplet_unique = []   
-                for path_triple in filtered_triple_3d:
-                    for triple in path_triple:
-                        h, r, t, direction = triple
-
-                        if direction == '->':
-                            head, tail = h, t
-                        elif direction == '<-':
-                            head, tail = t, h
-                        else:
-                            continue
-                        sentence_text = f"{head} {r.replace('_', ' ')} {tail}"
-                        if sentence_text in seen:
-                            continue
-                        seen.add(sentence_text)
-                        triplet_unique.append((head, r, tail))
-                triplet_unique.sort(key=lambda x: (x[0], x[2])) 
-
-                triplet_unique_batch.append(triplet_unique)
-                filtered_retrieve_result_batch.append(filtered_retrieve_result)
-                # filtered_triple_3d_batch.append(filtered_triple_3d)
-                data[index]['nebula_retrieve_time'] = nebula_retrieve_time
-                data[index]['filter_retrieve_time'] = filter_retrieve_time
-                nebula_retrieve_total_time.append(nebula_retrieve_time)
-                filter_retrieve_total_time.append(filter_retrieve_time)
-                nebula_retrieve_batch_time += nebula_retrieve_time
-                filter_retrieve_batch_time += filter_retrieve_time
-            logger.log(f"nebula retrieve time for batch: {nebula_retrieve_batch_time} seconds")
-            logger.log(f"filter retrieve time for batch: {filter_retrieve_batch_time} seconds")
-
             # 问答
             # if self.args.graphrag_response == "basic":
             #     response_one, num_input_tokens, response_time = self.graphrag.chat_without_stream_with_triplets(self.dataset.query[index], filtered_retrieve_result)
-            if self.args.graphrag_response == "basic_shared_prefix" :
-                response, prompt_len, response_time = self.graphrag.chat_without_stream_with_triplets_shared_prefix_batch(self.dataset.query[start_index: end_index], filtered_retrieve_result_batch)
+            if self.args.graphrag_response == "llm_only" :
+                response, prompt_len, response_time = self.graphrag.chat_without_stream_llm_only(self.dataset.query[start_index: end_index], [])
                 for i, index in enumerate(range(start_index, end_index)):
                     data[index]['response'] = response[i]
                     data[index]['prompt_tokens'] = prompt_len[i]
@@ -5532,41 +5566,9 @@ class KGModify:
                             acc_list.append(0)
                         data[index]['label'] = flag_TF
 
-            
             logger.log(f"forward response time for batch: {response_time} seconds")
             forward_response_total_time.append(response_time)
-            
-            # 反馈问答 暂未反馈到三元组
-            if self.args.feedback:
-                if self.args.feedback_process == 'standard_for_path_shared_prefix':
-                    feedback_response_batch, prompt_len, feedback_response_time = self.graphrag.chat_without_stream_for_socre_feedback_standard_shared_prefix_batch(self.dataset.query[start_index: end_index], self.response[start_index: end_index], filtered_retrieve_result_batch)
 
-                    for i, index in enumerate(range(start_index, end_index)):
-                        data[index]['feedback_response'] = feedback_response_batch[i]
-                        data[index]['feedback_prompt_tokens'] = prompt_len[i]
-                        data[index]['feedback_response_time'] = feedback_response_time/len(feedback_response_batch)
-                        feedback_prompt.append(prompt_len[i])
-                    feedback_response_total_time.append(feedback_response_time)
-                elif self.args.feedback_process == "basic_for_triplet_shared_prefix":
-                    feedback_response_batch, prompt_len, feedback_response_time = self.graphrag.chat_without_stream_for_socre_feedback_basic_shared_prefix_batch(self.dataset.query[start_index: end_index], self.response[start_index: end_index], triplet_unique_batch)
-
-                    for i, index in enumerate(range(start_index, end_index)):
-                        data[index]['feedback_response'] = feedback_response_batch[i]
-                        data[index]['feedback_prompt_tokens'] = prompt_len[i]
-                        data[index]['feedback_response_time'] = feedback_response_time/len(feedback_response_batch)
-                        feedback_prompt.append(prompt_len[i])
-                    feedback_response_total_time.append(feedback_response_time)
-                elif self.args.feedback_process == "leaderboardStrategy":
-                    feedback_response_batch, prompt_len, feedback_response_time = self.graphrag.chat_without_stream_for_leaderboardStrategy_feedback_shared_prefix_batch(self.dataset.query[start_index: end_index], self.response[start_index: end_index], triplet_unique_batch, acc_list[start_index: end_index])
-
-                    for i, index in enumerate(range(start_index, end_index)):
-                        data[index]['feedback_response'] = feedback_response_batch[i]
-                        data[index]['feedback_prompt_tokens'] = prompt_len[i]
-                        data[index]['feedback_response_time'] = feedback_response_time/len(feedback_response_batch)
-                        feedback_prompt.append(prompt_len[i])
-                    feedback_response_total_time.append(feedback_response_time)
-
-                logger.log(f"feedback response time for batch: {feedback_response_time} seconds")
 
             # 记录整个batch的log
             for i, index in enumerate(range(start_index, end_index)):
@@ -5574,43 +5576,9 @@ class KGModify:
                 logger.log(f"\n\n-------------index : {index}")
                 logger.log(f"query: {data[index]['query']}")
                 logger.log(f"prompt_tokens: {data[index]['prompt_tokens']}")
-                logger.log(f"keywords : {data[index]['keywords']}")
-                logger.log(f"filtered_retrieve_result : {json.dumps(data[index]['filtered_retrieve_result'], indent=2)}")
                 logger.log(f"answer: {data[index]['answer']}")
                 logger.log(f"response: {data[index]['response']}")
-                logger.log(f"graph rag reaponse {data[index]['label']}")
-
-                # 处理冗余 涉及大模型问答
-                if self.args.redundancy:
-                    
-                    delete_relationship_num_tmp, redundancy_time = self.redundant_process(method=self.args.redundant_process, filtered_triple_3d=data[index]["filtered_triple_3d"], index=index)
-                    delete_relationship_num.append(delete_relationship_num_tmp)
-                    redundancy_total_time.append(redundancy_time)
-                    
-
-                # 反馈处理
-                if self.args.feedback:
-                    if self.args.feedback_process == 'standard_for_path_shared_prefix' or self.args.feedback_process == 'basic_for_triplet_shared_prefix' or self.args.feedback_process == "leaderboardStrategy":
-                        feedback_process_start_time = time.perf_counter()
-                        self.feedback_process_one(
-                            method = self.args.feedback_process,
-                            filtered_retrieve_result = filtered_retrieve_result_batch[i] if self.args.feedback_process == "standard_for_path_shared_prefix" else triplet_unique_batch[i],
-                            response_dict = data[index]["feedback_response"],
-                            filtered_triple_3d = data[index]['filtered_triple_3d'],
-                            flag_TF = data[index]['label'], 
-                            feedback_noise = index in feedback_noise, 
-                            filtered_probs = data[index]['filtered_probs'], 
-                            filtered_dict = data[index]['filtered_dict'], 
-                            pt_list_standard = data[index]['pt_list_standard'], 
-                            args_param = self.args, 
-                            sim_map = data[index]['sim_map'], 
-                            score_map = data[index]['score_map'],)
-                        feedback_process_end_time = time.perf_counter()
-                        feedback_process_time = feedback_process_end_time - feedback_process_start_time
-                        logger.log(f"feedback_process_time: {feedback_process_time} seconds")
-                        feedback_process_total_time.append(feedback_process_time)
-
-        self.short_cut_for_graphdatabase()
+                logger.log(f"graph rag reaponse: {data[index]['label']}")
 
         if self.args.dataset_name == 'dragonball':
             accuracy = self.get_accuracy_rougel(labels_list)
@@ -5669,16 +5637,7 @@ class KGModify:
 
         logger.log(f"\n\n-----------------------accuracy : {sum(acc_list)/len(data)} acc query: {sum(acc_list)} / total query: {len(data)}-----------------------")
         logger.log(f"-----------------------forward prompt: {sum(forward_prompt)/len(data)}-----------------------")
-        if self.args.feedback:
-            logger.log(f"-----------------------feedback prompt: {sum(feedback_prompt)/len(data)}-----------------------")
-
-        logger.log(f"\n\n-----------------------keywords_total_time: {sum(keywords_total_time)/len(data)}-----------------------")
-        logger.log(f"-----------------------nebula retrieve_total_time: {sum(nebula_retrieve_total_time)/len(data)}-----------------------")
-        logger.log(f"-----------------------filter retrieve_total_time: {sum(filter_retrieve_total_time)/len(data)}-----------------------")
         logger.log(f"-----------------------forward_response_total_time: {sum(forward_response_total_time)/len(data)}-----------------------")
-        if self.args.feedback:
-            logger.log(f"-----------------------feedback_response_total_time: {sum(feedback_response_total_time)/len(data)}-----------------------")
-            logger.log(f"-----------------------feedback_process_total_time: {sum(feedback_process_total_time)/len(data)}-----------------------")
 
         if self.args.similar:
             with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}.json", "w", encoding="utf-8") as f:
@@ -5686,9 +5645,1388 @@ class KGModify:
         else:
             with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}.json", "w", encoding="utf-8") as f:
                 f.write(json.dumps(data, indent=2))
+                
+    def align_human_batch(self):
         
-        with open(f"./logs/{self.args.algorithm}/triplets/{self.args.space_name}_{self.args.iteration+1}.json", "w", encoding="utf-8") as file:
-            json.dump(self.triplets_score, file, ensure_ascii=False, indent=2)
+        print(f"llm_batch batch_size: {self.args.batch_size}")
+
+        self.ensure_stage_output_dir(algorithm=self.args.algorithm)
+
+        acc_list = []
+        data = []
+        labels_list = []
+
+        # 是否使用相似问题
+        if self.args.similar:
+            if self.args.dataset_name == 'rgb':
+                with open("./dataset/rgb/similar_questions_api_best.json", 'r', encoding='utf-8') as f:
+                    self.dataset.query = json.load(f)
+            elif self.args.dataset_name == 'multihop':
+                with open("./dataset/multihop/dataset/similar_questions_api_best.json", 'r', encoding='utf-8') as f:
+                    self.dataset.query = json.load(f)
+            elif self.args.dataset_name == 'hotpotqa600':
+                with open("./dataset/hotpotqa_graph/similar_questions_api_best.json", 'r', encoding='utf-8') as f:
+                    self.dataset.query = json.load(f)
+        
+        # current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        # 生成log文件
+        if self.args.similar:
+            logger = Logger(f"./{self.args.algorithm}/data/{self.args.llmbackend}_{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}")
+        else:
+            logger = Logger(f"./{self.args.algorithm}/data/{self.args.llmbackend}_{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}")
+        
+
+        self.logger = logger
+        # self.retriver.triplets_score = triplets_score # 传递给retriver
+        # self.retriver.logger = logger # 传递给retriver
+        # self.triplets_score = triplets_score
+
+        forward_response_total_time = []
+        feedback_response_total_time = []
+        forward_prompt = []
+        redundancy_total_time = []
+        feedback_process_total_time = []
+        feedback_prompt = []
+
+        # self.dataset.query = self.dataset.query[0:10]
+
+
+        for batch_idx, start_index in enumerate(range(0, len(self.dataset.query), self.args.batch_size)):
+            end_index = min(start_index + self.args.batch_size, len(self.dataset.query))
+            # if start_index >= 16: 
+            #     break
+
+            print(f"Batch {batch_idx}: start={start_index}, end={end_index}")
+            logger.log(f"\n\n-------------Batch {batch_idx}: start={start_index}, end={end_index}------------")
+            forward_start_time = time.perf_counter()
+            
+            data.extend([{} for _ in range(start_index, end_index)])
+
+            # 获取问题+答案
+            query_list = []
+            for index in range(start_index, end_index):
+                data[index]['index'] = index
+                data[index]['query'] = self.dataset.query[index]
+                query_list.append(self.dataset.query[index])
+                data[index]['answer'] = self.dataset.answer[index]
+                
+
+            # 问答
+            # if self.args.graphrag_response == "basic":
+            #     response_one, num_input_tokens, response_time = self.graphrag.chat_without_stream_with_triplets(self.dataset.query[index], filtered_retrieve_result)
+            if self.args.graphrag_response == "align_human_batch" :
+                response, prompt_len, response_time = self.graphrag.chat_without_stream_align_human_batch(self.dataset.query[start_index: end_index], self.dataset.answer[start_index: end_index], self.response[start_index: end_index])
+                for i, index in enumerate(range(start_index, end_index)):
+                    data[index]['response'] = response[i]
+                    data[index]['prompt_tokens'] = prompt_len[i]
+                    data[index]['response_time'] = response_time/len(response)
+                    forward_prompt.append(prompt_len[i])
+                    self.response.append(response[i])
+
+                    # 对错判断
+                    if self.args.dataset_name == 'dragonball':
+                        flag_label = self.checkanswer_rougel(response[i], self.dataset.answer[index])
+                        data[index]['label'] = flag_label
+                        labels_list.append(flag_label)
+                    else:
+                        flag_label = self.checkanswer(response[i], self.dataset.answer[index])
+                        flag_TF = sum(flag_label) == len(flag_label)
+                        if flag_TF:
+                            acc_list.append(1)
+                        else:
+                            acc_list.append(0)
+                        data[index]['label'] = flag_TF
+            
+            # 统计大模型模拟和人类的对齐水平
+            # if self.args.align_human:
+            #     response, prompt_len, response_time = self.graphrag.chat_without_stream_align_human_batch(self.dataset.query[start_index: end_index], self.dataset.answer[start_index: end_index], self.response[start_index: end_index])
+            #     for i, index in enumerate(range(start_index, end_index)):
+            #         data[index]['response_align_human'] = response[i].strip()
+            #         data[index]['prompt_tokens_align_human'] = prompt_len[i]
+            #         data[index]['response_time_align_human'] = response_time/len(response)
+            #         align_human_prompt.append(prompt_len[i])
+
+            #         # 对错判断
+            #         if self.args.dataset_name == 'dragonball':
+            #             pass
+            #         else:
+            #             align_human_flag = 0
+            #             if ((acc_list[index] == 1) and int(response[i].strip()) in [4,5]) or ((acc_list[index] == 0) and int(response[i].strip()) in [1,2]):
+            #                 align_human_flag = 1
+                            
+            #             align_human_acc.append(align_human_flag)
+            #             data[index]['label_align_human'] = bool(align_human_flag)
+                        
+            #     logger.log(f"align human response time for batch: {response_time} seconds")
+            #     align_human_response_total_time.append(response_time)
+
+            logger.log(f"forward response time for batch: {response_time} seconds")
+            forward_response_total_time.append(response_time)
+
+
+            # 记录整个batch的log
+            for i, index in enumerate(range(start_index, end_index)):
+                print(f"Processing index: {index}")
+                logger.log(f"\n\n-------------index : {index}")
+                logger.log(f"query: {data[index]['query']}")
+                logger.log(f"prompt_tokens: {data[index]['prompt_tokens']}")
+                logger.log(f"answer: {data[index]['answer']}")
+                logger.log(f"response: {data[index]['response']}")
+                logger.log(f"graph rag reaponse: {data[index]['label']}")
+
+        if self.args.dataset_name == 'dragonball':
+            accuracy = self.get_accuracy_rougel(labels_list)
+            logger.log(f"----------accuracy rougel ...------------\n{accuracy}")
+        elif self.args.dataset_name == 'metaqa':
+            # 分 hop1 200 hop2 100 hop3 100
+            # hop1 300 hop2 300
+            
+            print(f"query_number: {len(data)}")
+            for range_start, range_end in [[0,300],[300,600]]:
+                response_list = []
+                answer_list = []
+                range_acc = []
+                for i in range(range_start, min(len(data), range_end)):
+                    response_item = {}
+                    answer_item = {}
+                    response_item['id'] = str(i)
+                    response_item["prediction_text"] = self.response[i]
+                    response_item["no_answer_probability"] = 0.0   # 'no_answer_probability'
+                    response_list.append(response_item)
+                    reference_answer_item = {}
+                    reference_answer_item['text'] = self.combine_answer_formats(self.dataset.answer[i], delimiter=', ')
+                    reference_answer_item['answer_start'] = [0] * len(reference_answer_item['text'])
+                    answer_item['id'] = str(i)
+                    answer_item['answers'] = reference_answer_item
+                    answer_list.append(answer_item)
+                    range_acc.append(acc_list[i])
+                squad_v2_metric = load("squad_v2")
+                if response_list and answer_list:
+                    results_v2 = squad_v2_metric.compute(predictions = response_list, references = answer_list)
+                    logger.log(f"--------squad_v2 em f1 ... range[{range_start},{range_end}]------------\n{json.dumps(results_v2, indent=2)}")
+                # if range_acc:
+                    logger.log(f"--------accuracy range[{range_start},{range_end}]: {sum(range_acc)/len(range_acc)}-----------------------")
+        else:
+            # EM F1
+            response_list = []
+            answer_list = []
+            print(f"query_number: {len(data)}")
+            for i in range(len(data)):
+                response_item = {}
+                answer_item = {}
+                response_item['id'] = str(i)
+                response_item["prediction_text"] = self.response[i]
+                response_item["no_answer_probability"] = 0.0   # 'no_answer_probability'
+                response_list.append(response_item)
+                reference_answer_item = {}
+                reference_answer_item['text'] = self.combine_answer_formats(self.dataset.answer[i], delimiter=', ')
+                reference_answer_item['answer_start'] = [0] * len(reference_answer_item['text'])
+                answer_item['id'] = str(i)
+                answer_item['answers'] = reference_answer_item
+                answer_list.append(answer_item)
+            squad_v2_metric = load("squad_v2")
+            results_v2 = squad_v2_metric.compute(predictions = response_list, references = answer_list)
+            logger.log(f"--------squad_v2 em f1 ...------------\n{json.dumps(results_v2, indent=2)}")
+
+
+        logger.log(f"\n\n-----------------------accuracy : {sum(acc_list)/len(data)} acc query: {sum(acc_list)} / total query: {len(data)}-----------------------")
+        logger.log(f"-----------------------forward prompt: {sum(forward_prompt)/len(data)}-----------------------")
+        logger.log(f"-----------------------forward_response_total_time: {sum(forward_response_total_time)/len(data)}-----------------------")
+
+        if self.args.similar:
+            with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}.json", "w", encoding="utf-8") as f:
+                f.write(json.dumps(data, indent=2))
+        else:
+            with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}.json", "w", encoding="utf-8") as f:
+                f.write(json.dumps(data, indent=2))
+
+
+    def human_batch(self):
+        
+        print(f"llm_batch batch_size: {self.args.batch_size}")
+
+        self.ensure_stage_output_dir(algorithm=self.args.algorithm)
+
+        acc_list = []
+        data = []
+        labels_list = []
+
+        # 是否使用相似问题
+        if self.args.similar:
+            if self.args.dataset_name == 'rgb':
+                # with open("./dataset/rgb/similar_questions_api_best.json", 'r', encoding='utf-8') as f:
+                #     self.dataset.query = json.load(f)
+                with open("./dataset/rgb/similar_questions_api_deepseek.json", 'r', encoding='utf-8') as f:
+                    similar_data = json.load(f)
+                    # self.dataset.query = similar_data[self.args.iteration]
+                    self.dataset.query = similar_data[0]
+                # print(f"similar questions loaded for rgb dataset, total: {len(self.dataset.query)}")
+            elif self.args.dataset_name == 'multihop':
+                with open("./dataset/multihop/dataset/similar_questions_api_best.json", 'r', encoding='utf-8') as f:
+                    self.dataset.query = json.load(f)
+            elif self.args.dataset_name == 'hotpotqa600':
+                with open("./dataset/hotpotqa_graph/similar_questions_api_best.json", 'r', encoding='utf-8') as f:
+                    self.dataset.query = json.load(f)
+        
+        # current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        # 生成log文件
+        if self.args.similar:
+            logger = Logger(f"./{self.args.algorithm}/data/{self.args.llmbackend}_{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}")
+        else:
+            logger = Logger(f"./{self.args.algorithm}/data/{self.args.llmbackend}_{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}")
+        self.logger = logger
+        
+        # 读取三元组分数
+        with open(f"./logs/{self.args.algorithm}/triplets/{self.args.space_name}_{self.args.iteration}.json", "r", encoding="utf-8") as file:
+            triplets_score = json.load(file)
+            
+        self.triplets_score = triplets_score
+        self.triplets_score_modify = copy.deepcopy(triplets_score)
+        # 是否是中断继续跑
+        if self.args.feedback:
+            path = f"./logs/{self.args.algorithm}/triplets/{self.args.space_name}_{self.args.iteration+1}.json"
+            if os.path.exists(path):  
+                with open(path, "r", encoding="utf-8") as file:
+                    self.triplets_score_modify = json.load(file)
+                logger.log(f"*****************\n***************exists triplet file in {path}")
+                
+        # 前向结果
+        if self.args.similar: # 会走这条路
+            with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}.json", "r", encoding="utf-8") as f:
+                data_forward = json.load(f)
+        else:
+            with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}.json", "r", encoding="utf-8") as f:
+                data_forward = json.load(f)
+
+        if self.args.similar:
+            with open(f"./logs/{self.args.algorithm}/qwen2.5-32b-instruct-rgb-similar/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}.json", "r", encoding="utf-8") as f:
+                data_feedback = json.load(f)
+        else:
+            with open(f"./logs/{self.args.algorithm}/qwen2.5-32b-instruct-rgb-similar/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}.json", "r", encoding="utf-8") as f:
+                data_feedback = json.load(f)
+
+
+
+        forward_response_total_time = []
+        feedback_response_total_time = []
+        forward_prompt = []
+        redundancy_total_time = []
+        feedback_process_total_time = []
+        feedback_prompt = []
+
+        # self.dataset.query = self.dataset.query[0:10]
+
+
+        for batch_idx, start_index in enumerate(range(0, len(data_forward), self.args.batch_size)):
+            end_index = min(start_index + self.args.batch_size, len(self.dataset.query))
+            # if start_index >= 16: 
+            #     break
+
+            print(f"Batch {batch_idx}: start={start_index}, end={end_index}")
+            logger.log(f"\n\n-------------Batch {batch_idx}: start={start_index}, end={end_index}------------")
+            forward_start_time = time.perf_counter()
+            
+            data.extend([{} for _ in range(start_index, end_index)])
+
+            # 获取问题+答案
+            query_list = []
+            for index in range(start_index, end_index):
+                data[index]['index'] = index
+                data[index]['query'] = self.dataset.query[index]
+                query_list.append(self.dataset.query[index])
+                data[index]['answer'] = self.dataset.answer[index]
+                
+
+            # 问答
+            # if self.args.graphrag_response == "basic":
+            #     response_one, num_input_tokens, response_time = self.graphrag.chat_without_stream_with_triplets(self.dataset.query[index], filtered_retrieve_result)
+            if self.args.graphrag_response == "align_human_batch" :
+                response, prompt_len, response_time = self.graphrag.chat_without_stream_align_human_batch(self.dataset.query[start_index: end_index], self.dataset.answer[start_index: end_index], self.response[start_index: end_index])
+                for i, index in enumerate(range(start_index, end_index)):
+                    data[index]['response'] = response[i]
+                    data[index]['prompt_tokens'] = prompt_len[i]
+                    data[index]['response_time'] = response_time/len(response)
+                    forward_prompt.append(prompt_len[i])
+                    self.response.append(response[i])
+
+                    # 对错判断
+                    if self.args.dataset_name == 'dragonball':
+                        flag_label = self.checkanswer_rougel(response[i], self.dataset.answer[index])
+                        data[index]['label'] = flag_label
+                        labels_list.append(flag_label)
+                    else:
+                        flag_label = self.checkanswer(response[i], self.dataset.answer[index])
+                        flag_TF = sum(flag_label) == len(flag_label)
+                        if flag_TF:
+                            acc_list.append(1)
+                        else:
+                            acc_list.append(0)
+                        data[index]['label'] = flag_TF
+
+            logger.log(f"forward response time for batch: {response_time} seconds")
+            forward_response_total_time.append(response_time)
+
+
+            # 记录整个batch的log
+            for i, index in enumerate(range(start_index, end_index)):
+                print(f"Processing index: {index}")
+                logger.log(f"\n\n-------------index : {index}")
+                logger.log(f"query: {data[index]['query']}")
+                logger.log(f"prompt_tokens: {data[index]['prompt_tokens']}")
+                logger.log(f"answer: {data[index]['answer']}")
+                logger.log(f"response: {data[index]['response']}")
+                logger.log(f"graph rag reaponse: {data[index]['label']}")
+
+            # 保存三元组数据
+            if self.args.feedback:    
+                with open(f"./logs/{self.args.algorithm}/triplets/{self.args.space_name}_{self.args.iteration+1}.json", "w", encoding="utf-8") as file:
+                    json.dump(self.triplets_score_modify, file, ensure_ascii=False, indent=2)   
+            
+            # 保存data
+            if self.args.similar:
+                with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}.json", "w", encoding="utf-8") as f:
+                    f.write(json.dumps(data, indent=2))
+            else:
+                with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}.json", "w", encoding="utf-8") as f:
+                    f.write(json.dumps(data, indent=2))
+
+
+        
+
+
+        logger.log(f"\n\n-----------------------accuracy : {sum(acc_list)/len(data)} acc query: {sum(acc_list)} / total query: {len(data)}-----------------------")
+        logger.log(f"-----------------------forward prompt: {sum(forward_prompt)/len(data)}-----------------------")
+        logger.log(f"-----------------------forward_response_total_time: {sum(forward_response_total_time)/len(data)}-----------------------")
+
+
+        # 保存三元组数据
+        if self.args.feedback:    
+            with open(f"./logs/{self.args.algorithm}/triplets/{self.args.space_name}_{self.args.iteration+1}.json", "w", encoding="utf-8") as file:
+                json.dump(self.triplets_score_modify, file, ensure_ascii=False, indent=2)   
+                
+        if self.args.similar:
+            with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}.json", "w", encoding="utf-8") as f:
+                f.write(json.dumps(data, indent=2))
+        else:
+            with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}.json", "w", encoding="utf-8") as f:
+                f.write(json.dumps(data, indent=2))
+
+        if self.args.dataset_name == 'dragonball':
+            accuracy = self.get_accuracy_rougel(labels_list)
+            logger.log(f"----------accuracy rougel ...------------\n{accuracy}")
+        elif self.args.dataset_name == 'metaqa':
+            # 分 hop1 200 hop2 100 hop3 100
+            # hop1 300 hop2 300
+            
+            print(f"query_number: {len(data)}")
+            for range_start, range_end in [[0,300],[300,600]]:
+                response_list = []
+                answer_list = []
+                range_acc = []
+                for i in range(range_start, min(len(data), range_end)):
+                    response_item = {}
+                    answer_item = {}
+                    response_item['id'] = str(i)
+                    response_item["prediction_text"] = self.response[i]
+                    response_item["no_answer_probability"] = 0.0   # 'no_answer_probability'
+                    response_list.append(response_item)
+                    reference_answer_item = {}
+                    reference_answer_item['text'] = self.combine_answer_formats(self.dataset.answer[i], delimiter=', ')
+                    reference_answer_item['answer_start'] = [0] * len(reference_answer_item['text'])
+                    answer_item['id'] = str(i)
+                    answer_item['answers'] = reference_answer_item
+                    answer_list.append(answer_item)
+                    range_acc.append(acc_list[i])
+                squad_v2_metric = load("squad_v2")
+                if response_list and answer_list:
+                    results_v2 = squad_v2_metric.compute(predictions = response_list, references = answer_list)
+                    logger.log(f"--------squad_v2 em f1 ... range[{range_start},{range_end}]------------\n{json.dumps(results_v2, indent=2)}")
+                # if range_acc:
+                    logger.log(f"--------accuracy range[{range_start},{range_end}]: {sum(range_acc)/len(range_acc)}-----------------------")
+        else:
+            # EM F1
+            response_list = []
+            answer_list = []
+            print(f"query_number: {len(data)}")
+            for i in range(len(data)):
+                response_item = {}
+                answer_item = {}
+                response_item['id'] = str(i)
+                response_item["prediction_text"] = self.response[i]
+                response_item["no_answer_probability"] = 0.0   # 'no_answer_probability'
+                response_list.append(response_item)
+                reference_answer_item = {}
+                reference_answer_item['text'] = self.combine_answer_formats(self.dataset.answer[i], delimiter=', ')
+                reference_answer_item['answer_start'] = [0] * len(reference_answer_item['text'])
+                answer_item['id'] = str(i)
+                answer_item['answers'] = reference_answer_item
+                answer_list.append(answer_item)
+            squad_v2_metric = load("squad_v2")
+            results_v2 = squad_v2_metric.compute(predictions = response_list, references = answer_list)
+            logger.log(f"--------squad_v2 em f1 ...------------\n{json.dumps(results_v2, indent=2)}")
+
+    def evolve_batch(self):
+
+        print(f"evolve_basic iteration: {self.args.iteration} batch_size: {self.args.batch_size}")
+        # assert False
+
+        # load score
+
+        acc_list = []
+        f1_list = []
+        human_list = []
+        acc_list_end = []
+        acc_llm = 0
+        acc_refuse = 0
+        delete_relationship_num = 0
+        insert_relationship_by_entity_num = 0
+        delete_relationship_by_entity_num = 0
+        delete_entity_num = 0
+        # data = []
+        labels_list = []
+
+        print(type(self.args.iteration))
+        print(f"self.args.iteration: {self.args.iteration}")
+        
+        # 读取三元组分数
+        with open(f"./logs/{self.args.algorithm}/triplets/{self.args.space_name}_{self.args.iteration}.json", "r", encoding="utf-8") as file:
+            triplets_score = json.load(file)
+        
+        # 是否使用相似问题
+        if self.args.similar:
+            if self.args.dataset_name == 'rgb':
+                # with open("./dataset/rgb/similar_questions_api_best.json", 'r', encoding='utf-8') as f:
+                #     self.dataset.query = json.load(f)
+                with open("./dataset/rgb/similar_questions_api_deepseek.json", 'r', encoding='utf-8') as f:
+                    similar_data = json.load(f)
+                    # self.dataset.query = similar_data[self.args.iteration]
+                    self.dataset.query = similar_data[0]
+                # print(f"similar questions loaded for rgb dataset, total: {len(self.dataset.query)}")
+            elif self.args.dataset_name == 'multihop':
+                # with open("./dataset/multihop/dataset/similar_questions_api_best.json", 'r', encoding='utf-8') as f:
+                #     self.dataset.query = json.load(f)
+                with open("./dataset/multihop/dataset/similar_questions_api_deepseek.json", 'r', encoding='utf-8') as f:
+                    similar_data = json.load(f)
+                    self.dataset.query = similar_data[0]
+                    
+            elif self.args.dataset_name == 'hotpotqa600':
+                # with open("./dataset/hotpotqa_graph/similar_questions_api_best.json", 'r', encoding='utf-8') as f:
+                #     self.dataset.query = json.load(f)
+                with open("./dataset/hotpotqa_graph/similar_questions_api_deepseek.json", 'r', encoding='utf-8') as f:
+                    similar_data = json.load(f)
+                    # self.dataset.query = similar_data[self.args.iteration]
+                    self.dataset.query = similar_data[0]
+        
+        # 是否重新生成嵌入文件 未启用
+        if self.args.shouldRebuildDatabase:
+            # 这轮开始重新生成嵌入
+            entities_new = set()
+            for value in triplets_score.values():
+                if value['score'] > self.args.scoreThreshold:
+                    entities_new.add(value['triplet'][0])
+                    entities_new.add(value['triplet'][2])
+            self.retriver.generate_new_entity_embedding_standard(list(sorted(entities_new)))
+        
+        # current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        # 生成log文件
+        if self.args.similar:
+            if self.args.evo_case:
+                logger = Logger(f"./{self.args.algorithm}/data/{self.args.llmbackend}_{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}_{self.args.entity}_{self.args.pruning}")
+            elif self.args.depcache_case:
+                logger = Logger(f"./{self.args.algorithm}/data/{self.args.llmbackend}_{self.args.llm}_{self.args.option}_depcache_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}_{self.args.entity}_{self.args.pruning}")
+            else:
+                logger = Logger(f"./{self.args.algorithm}/data/{self.args.llmbackend}_{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}")
+        else:
+            if self.args.evo_case:
+                logger = Logger(f"./{self.args.algorithm}/data/{self.args.llmbackend}_{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}_{self.args.entity}_{self.args.pruning}")
+            elif self.args.depcache_case:
+                logger = Logger(f"./{self.args.algorithm}/data/{self.args.llmbackend}_{self.args.llm}_{self.args.option}_depcache_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}_{self.args.entity}_{self.args.pruning}")
+            else:
+                logger = Logger(f"./{self.args.algorithm}/data/{self.args.llmbackend}_{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}")
+                
+        self.logger = logger
+        self.retriver.triplets_score = triplets_score # 传递给retriver
+        self.retriver.logger = logger # 传递给retriver
+        self.triplets_score = triplets_score
+        self.triplets_score_modify = copy.deepcopy(triplets_score)
+        # 是否是中断继续跑
+        # if self.args.feedback:
+        #     path = f"./logs/{self.args.algorithm}/triplets/{self.args.space_name}_{self.args.iteration+1}.json"
+        #     if os.path.exists(path):  
+        #         with open(path, "r", encoding="utf-8") as file:
+        #             self.triplets_score_modify = json.load(file)
+        #         logger.log(f"*****************\n***************exists triplet file in {path}")
+        
+    
+        delete_relationship_num = []
+        keywords_total_time = []
+        nebula_retrieve_total_time = []
+        filter_retrieve_total_time = []
+        forward_response_total_time = []
+        diff_response_total_time = []
+        align_human_response_total_time = []
+        feedback_response_total_time = []
+        forward_prompt = []
+        redundancy_total_time = []
+        feedback_process_total_time = []
+        feedback_prompt = []
+        
+        
+        # 特别统计
+        diff_prompt = []
+        align_human_prompt = []
+        align_human_response = []
+        align_human_acc = []
+
+        if self.args.space_name == 'hotpotqa1M' or self.args.space_name == 'hotpotqa1M_v2' or self.args.space_name == 'hotpotqa1M_v3':
+            self.dataset.query = self.dataset.query[0:5000]
+            self.dataset.answer = self.dataset.answer[0:5000]
+            pass
+        
+        
+        # 加噪声 必须在only error之前
+        feedback_noise = []
+        if self.args.rate != 0.0:
+            if self.args.iteration == 0 or (self.args.iteration == 1 and self.args.space_name == 'hotpotqa1M_v2'):
+                feedback_random_last = []
+            else:
+                with open(f"./logs/{self.args.algorithm}/stage/{self.args.space_name}_error_feedback_random_{self.args.iteration-1}.json", 'r', encoding='utf-8') as file:
+                    feedback_random_last = json.load(file)
+            feedback_noise = self.select_10_percent(len(self.dataset.query), self.args.rate, feedback_random_last)
+            with open(f"./logs/{self.args.algorithm}/stage/{self.args.space_name}_error_feedback_random_{self.args.iteration}.json", 'w', encoding='utf-8') as file:
+                file.write(json.dumps(feedback_noise, indent=2))
+            logger.log(f"-------------feedback_noise last (rate: {self.args.rate}): {feedback_random_last}")
+            logger.log(f"-------------feedback_noise (rate: {self.args.rate}): {feedback_noise}")
+            
+        # 仅错误样本 配合batch为1
+        if self.args.only_error:
+            if self.args.iteration == 0:
+                error_index_last = [i for i in range(len(self.dataset.query))]
+                # with open(f"./logs/{self.args.algorithm}/stage/error_index_{self.args.space_name}_{self.args.llm}_start.json", 'r', encoding='utf-8') as file:
+                #     error_index_last = json.load(file)
+            else:
+                with open(f"./logs/{self.args.algorithm}/stage/error_index_{self.args.space_name}_{self.args.llm}_{self.args.iteration-1}.json", 'r', encoding='utf-8') as file:
+                    error_index_last = json.load(file)
+                error_index_last = [i for i in error_index_last if i < len(self.dataset.query)]  # 因为hotpotqa1M_v2 初始有5k+问题，取前5k个
+                    
+            # self.dataset.query = [self.dataset.query[i] for i in error_index_last]
+            # self.dataset.answer = [self.dataset.answer[i] for i in error_index_last]
+            # new_to_old_map = {new_id: old_id for new_id, old_id in enumerate(error_index_last)}
+            # old_to_new_map = {old_id: new_id for new_id, old_id in enumerate(error_index_last)}
+            
+            combined_indices = list(set(error_index_last) | set(feedback_noise))  # 不仅仅是回答错误的，还有反馈错误的
+            combined_indices.sort()
+
+            self.dataset.query = [self.dataset.query[i] for i in combined_indices]
+            self.dataset.answer = [self.dataset.answer[i] for i in combined_indices]
+
+            new_to_old_map = {new_id: old_id for new_id, old_id in enumerate(combined_indices)}
+            old_to_new_map = {old_id: new_id for new_id, old_id in enumerate(combined_indices)}
+            
+        error_index = []
+        answer_use = []
+
+        # 不在检索数据库 获取历史结果
+        if self.args.evo_no_retrieve or self.args.depcache_case:
+            with open(f"./logs/leaderboardStrategy/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_0_baseline.json", 'r', encoding='utf-8') as file:
+                data_list_last = json.load(file)
+        elif self.args.evo_case:   # 可以直接使用合并后结果的filtered_retrieve_result_2d 和 filtered_triple_4d 去组合，毕竟这个东西经历了当时分数的阈值筛选. 必须得配合 use_concurrent, 代码原因
+            # with open(f"./logs/leaderboardStrategy/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_0-{self.args.iteration}_data.json", 'r', encoding='utf-8') as file:
+            #     data_list_last = json.load(file)
+            with open(f"./logs/leaderboardStrategy/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_0_baseline.json", 'r', encoding='utf-8') as file:
+                data_list_last = json.load(file)
+
+        
+
+        # self.dataset.query = self.dataset.query[0:len(self.dataset.query)]
+        # self.dataset.query = self.dataset.query[0:10]
+        skip_index = 0
+        logger.log(f"*****\n*****skip index {skip_index}")
+        self.dataset.query = self.dataset.query[skip_index:]
+        self.dataset.answer = self.dataset.answer[skip_index:]
+        data = []
+        # 是否是中断继续跑
+        start_index = 0
+        # if self.args.similar:
+        #     if self.args.evo_case:
+        #         path = f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}_{self.args.entity}_{self.args.pruning}.json"
+        #         if os.path.exists(path):
+        #             with open(path, "r", encoding="utf-8") as f:
+        #                 data = json.load(f)
+        #             start_index = len(data)
+        #             logger.log(f"*****************\n***************exists data file({len(data)}) in {path}")
+        #     elif self.args.depcache_case:
+        #         path = f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_depcache_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}_{self.args.entity}_{self.args.pruning}.json"
+        #         if os.path.exists(path):
+        #             with open(path, "r", encoding="utf-8") as f:
+        #                 data = json.load(f)
+        #             start_index = len(data)
+        #             logger.log(f"*****************\n***************exists data file({len(data)}) in {path}")
+        #     else:
+        #         path = f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}.json"
+        #         if os.path.exists(path):
+        #             with open(path, "r", encoding="utf-8") as f:
+        #                 data = json.load(f)
+        #             start_index = len(data)
+        #             logger.log(f"*****************\n***************exists data file({len(data)}) in {path}")
+        # else:
+        #     if self.args.evo_case:
+        #         path = f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}_{self.args.entity}_{self.args.pruning}.json"
+        #         if os.path.exists(path):
+        #             with open(path, "r", encoding="utf-8") as f:
+        #                 data = json.load(f)
+        #             start_index = len(data)
+        #             logger.log(f"*****************\n***************exists data file({len(data)}) in {path}")
+        #     elif self.args.depcache_case:
+        #         path = f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_depcache_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}_{self.args.entity}_{self.args.pruning}.json"
+        #         if os.path.exists(path):
+        #             with open(path, "r", encoding="utf-8") as f:
+        #                 data = json.load(f)
+        #             start_index = len(data)
+        #             logger.log(f"*****************\n***************exists data file({len(data)}) in {path}")
+        #     else:
+        #         path = f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}.json"
+        #         if os.path.exists(path):
+        #             with open(path, "r", encoding="utf-8") as f:
+        #                 data = json.load(f)
+        #             start_index = len(data)
+        #             logger.log(f"*****************\n***************exists data file({len(data)}) in {path}")
+        
+        # 把嵌入模型放入显存
+        keywords_list, keyword_time = self.retriver.extract_keywords_with_embedding_find_entity("test query", self.args.entity)
+        for batch_idx, start_index in enumerate(range(start_index , len(self.dataset.query), self.args.batch_size)):
+            end_index = min(start_index + self.args.batch_size, len(self.dataset.query))
+            # if start_index >= 16: 
+            #     break
+
+            print(f"Batch {batch_idx}: start={start_index}, end={end_index}")
+            logger.log(f"\n\n-------------Batch {batch_idx}: start={start_index}, end={end_index}------------")
+            forward_start_time = time.perf_counter()
+            
+            data.extend([{} for _ in range(start_index, end_index)])
+            
+            # 把batch-size 设置为1 直接切片就不需要这个了
+            # if self.args.only_error:
+            #     if start_index not in error_index_last:
+            #         continue
+
+            # 获取问题+答案
+            query_list = []
+            for index in range(start_index, end_index):
+                data[index]['index'] = new_to_old_map[index] if self.args.only_error else index
+                data[index]['query'] = self.dataset.query[index]
+                query_list.append(self.dataset.query[index])
+                data[index]['answer'] = self.dataset.answer[index]
+
+            # 实体检索
+            if self.args.evo_no_retrieve or self.args.evo_case or self.args.depcache_case:
+                # 复用实体
+                keyword_time_start = time.perf_counter()
+                for i, index in enumerate(range(start_index, end_index)):
+                    # data[index]['keywords'] = data_list_last[new_to_old_map[index] if self.args.only_error else index]['keywords'][:self.args.entity]
+                    data[index]['keywords'] = data_list_last[new_to_old_map[index] if self.args.only_error else index]['keywords']
+                    data[index]['keyword_time'] = 0
+                keyword_time_end = time.perf_counter()
+                keyword_time = keyword_time_end - keyword_time_start
+                
+            else:
+                if self.args.batch_size <= 5:
+                    keywords_list, keyword_time = self.retriver.extract_keywords_with_embedding_find_entity(query_list, self.args.entity) # 问题相似度选 10
+                else:
+                    keywords_list, keyword_time = self.retriver.extract_keywords_with_embedding_find_entity_batch(query_list, self.args.entity) # 问题相似度选 10 batch_size 越大越快 小于5时反而慢
+                for i, index in enumerate(range(start_index, end_index)):
+                    data[index]['keywords'] = keywords_list[i]
+                    data[index]['keyword_time'] = keyword_time/len(keywords_list)
+            
+            logger.log(f"keywords extraction time for batch: {keyword_time} seconds")   
+            keywords_total_time.append(keyword_time)
+
+            # 路径检索
+            nebula_retrieve_batch_time = 0
+            filter_retrieve_batch_time = 0
+            filtered_retrieve_result_batch = []
+            filtered_triple_3d_batch = []
+            triplet_unique_batch = []
+            
+            if self.args.use_concurrent:
+                if self.args.evo_data and self.args.retrieve_path == 'basic':
+                    questions_data = []
+                    for i, index in enumerate(range(start_index, end_index)):
+                        questions_data.append({
+                            "question": self.dataset.query[index],
+                            "keywords": data[index]['keywords'],
+                            "filtered_retrieve_result_2d": [],
+                            "filtered_triple_4d": [],
+                            "method": False
+                        })
+                    def process_single_task(data):
+                        # 这里调用你的原函数
+                        return self.retriver.retrieve_path_with_keywords_v3_data(
+                            question=data['question'], 
+                            keywords=data['keywords'], 
+                            clean_rel_map_list_data = data['filtered_retrieve_result_2d'], 
+                            sentence_to_triple_4d_data = data['filtered_triple_4d'],
+                            path_depth = self.args.hop, 
+                            pruning=self.args.pruning, 
+                            threshold=0,  # self.args.simThreshold 强制设置为0，也就是尽可能多得保留
+                            score_threshold = self.args.scoreThreshold,
+                            build_node = False,
+                            method = data['method'],
+                        )
+                    # 使用线程池并发执行
+                    with ThreadPoolExecutor(max_workers=1) as executor: # max_workers=self.args.batch_size
+                        results = list(executor.map(process_single_task, questions_data))
+                elif self.args.evo_no_retrieve and self.args.retrieve_path == 'basic':
+                    questions_data = []
+                    for i, index in enumerate(range(start_index, end_index)):
+                        questions_data.append({
+                            "question": self.dataset.query[index],
+                            "keywords": [],
+                            "filtered_retrieve_result_2d": data_list_last[new_to_old_map[index] if self.args.only_error else index]['filtered_retrieve_result_2d'],
+                            "filtered_triple_4d": data_list_last[new_to_old_map[index] if self.args.only_error else index]['filtered_triple_4d'],
+                            "method": True
+                        })
+                    def process_single_task(data):
+                        # 这里调用你的原函数
+                        return self.retriver.retrieve_path_with_keywords_v3_data(
+                            question=data['question'], 
+                            keywords=data['keywords'], 
+                            clean_rel_map_list_data = data['filtered_retrieve_result_2d'], 
+                            sentence_to_triple_4d_data = data['filtered_triple_4d'],
+                            path_depth = self.args.hop, 
+                            pruning=self.args.pruning,  # 16
+                            threshold=self.args.simThreshold, 
+                            score_threshold = self.args.scoreThreshold, 
+                            build_node = False,
+                            method = data['method'],
+                        )
+                    # 使用线程池并发执行
+                    with ThreadPoolExecutor(max_workers=1) as executor: # max_workers=self.args.batch_size
+                        results = list(executor.map(process_single_task, questions_data))
+                elif self.args.evo_case and self.args.retrieve_path == 'basic':
+                    
+                    # 依旧再次嵌入过滤
+                    questions_data = []
+                    for i, index in enumerate(range(start_index, end_index)):
+                        questions_data.append({
+                            "question": self.dataset.query[index],
+                            "keywords": [],
+                            "filtered_retrieve_result_2d": data_list_last[index]['filtered_retrieve_result_2d'],
+                            "filtered_triple_4d": data_list_last[index]['filtered_triple_4d'],
+                            "method": True
+                        })
+                    def process_single_task(data):
+                        # 这里调用你的原函数
+                        return self.retriver.retrieve_path_with_keywords_v3_data(
+                            question=data['question'], 
+                            keywords=data['keywords'], 
+                            clean_rel_map_list_data = data['filtered_retrieve_result_2d'], 
+                            sentence_to_triple_4d_data = data['filtered_triple_4d'],
+                            path_depth = self.args.hop, 
+                            pruning=self.args.pruning,  # 16
+                            threshold=self.args.simThreshold, 
+                            score_threshold = self.args.scoreThreshold, 
+                            build_node = False,
+                            method = data['method'],
+                        )
+                    # 使用线程池并发执行
+                    with ThreadPoolExecutor(max_workers=1) as executor: # max_workers=self.args.batch_size
+                        results = list(executor.map(process_single_task, questions_data))
+                elif self.args.depcache_case and self.args.retrieve_path == 'basic':        
+                    # 不再生成嵌入，直接使用, 针对hotpotqa1M_v2，因为最初的检索文件检索时相似度阈值为0，所以可以直接使用
+                    results = []
+                    for i, index in enumerate(range(start_index, end_index)):
+                        results.append(
+                            (data_list_last[index]['filtered_retrieve_result_2d'],
+                            data_list_last[index]['filtered_triple_4d'],
+                            0.1,
+                            0.1,)
+                        )
+                    time.sleep(7)  # 防止速率过快被服务器拒绝
+                for i, index in enumerate(range(start_index, end_index)):
+                    if self.args.evo_data and self.args.retrieve_path == 'basic':
+                        filtered_retrieve_result_2d, filtered_triple_4d, nebula_retrieve_time, filter_retrieve_time = results[i]
+                        filtered_retrieve_result = [item for item_1d in filtered_retrieve_result_2d[:10] for item in item_1d[:10]] # 给大模型的句子，带symbol
+                        filtered_triple_3d = [sub_2d for sub_3d in filtered_triple_4d[:10] for sub_2d in sub_3d[:10]] # 带symbol len = 4
+                        keywords_used = data[index]['keywords']
+                    elif self.args.evo_no_retrieve and self.args.retrieve_path == 'basic':   # 一开始这里entity没有被限制住 16*10
+                        filtered_retrieve_result_2d, filtered_triple_4d, nebula_retrieve_time, filter_retrieve_time = results[i]
+                        # filtered_retrieve_result = [item for item_1d in filtered_retrieve_result_2d[:] for item in item_1d[:]] # 给大模型的句子，带symbol
+                        # filtered_triple_3d = [sub_2d for sub_3d in filtered_triple_4d[:] for sub_2d in sub_3d[:]] # 带symbol len = 4
+                        # filtered_retrieve_result = [item for item_1d in filtered_retrieve_result_2d[:self.args.entity] for item in item_1d[:self.args.pruning]] # 给大模型的句子，带symbol
+                        # filtered_triple_3d = [sub_2d for sub_3d in filtered_triple_4d[:self.args.entity] for sub_2d in sub_3d[:self.args.pruning]] # 带symbol len = 4
+                        if self.args.skip_empty_entities:
+                            valid_indices = [ # 获取索引
+                                i for i, item_1d in enumerate(filtered_retrieve_result_2d) 
+                                if item_1d
+                            ][:self.args.entity]
+                        else:
+                            valid_indices = list(range(len(filtered_retrieve_result_2d)))[:self.args.entity]
+                        valid_items_2d = [filtered_retrieve_result_2d[i] for i in valid_indices]
+                        filtered_retrieve_result = [
+                            item 
+                            for item_1d in valid_items_2d 
+                            for item in item_1d[:self.args.pruning]
+                        ]
+                        valid_triples_3d = [filtered_triple_4d[i] for i in valid_indices]
+                        filtered_triple_3d = [
+                            sub_2d 
+                            for sub_3d in valid_triples_3d 
+                            for sub_2d in sub_3d[:self.args.pruning]
+                        ]
+                        # keywords_used = [data[new_to_old_map[index] if self.args.only_error else index]['keywords'][i] for i in valid_indices]
+                        keywords_used = [data[index]['keywords'][i] for i in valid_indices]
+                    elif self.args.evo_case and self.args.retrieve_path == 'basic':
+                        filtered_retrieve_result_2d, filtered_triple_4d, nebula_retrieve_time, filter_retrieve_time = results[i]
+                        # filtered_retrieve_result = [item for item_1d in filtered_retrieve_result_2d[:self.args.entity] for item in item_1d[:self.args.pruning]] # 给大模型的句子，带symbol
+                        # filtered_triple_3d = [sub_2d for sub_3d in filtered_triple_4d[:self.args.entity] for sub_2d in sub_3d[:self.args.pruning]] # 带symbol len = 4
+                        if self.args.skip_empty_entities:
+                            valid_indices = [ # 获取索引
+                                i for i, item_1d in enumerate(filtered_retrieve_result_2d) 
+                                if item_1d
+                            ][:self.args.entity]
+                        else:
+                            valid_indices = list(range(len(filtered_retrieve_result_2d)))[:self.args.entity]
+                        valid_items_2d = [filtered_retrieve_result_2d[i] for i in valid_indices]
+                        filtered_retrieve_result = [
+                            item 
+                            for item_1d in valid_items_2d 
+                            for item in item_1d[:self.args.pruning]
+                        ]
+                        valid_triples_3d = [filtered_triple_4d[i] for i in valid_indices]
+                        filtered_triple_3d = [
+                            sub_2d 
+                            for sub_3d in valid_triples_3d 
+                            for sub_2d in sub_3d[:self.args.pruning]
+                        ]
+                        keywords_used = [data[index]['keywords'][i] for i in valid_indices]
+                        
+                    elif self.args.depcache_case and self.args.retrieve_path == 'basic':
+                        filtered_retrieve_result_2d, filtered_triple_4d, nebula_retrieve_time, filter_retrieve_time = results[i]
+                        filtered_retrieve_result = [item for item_1d in filtered_retrieve_result_2d[:self.args.entity] for item in item_1d[:self.args.pruning]] # 给大模型的句子，带symbol
+                        filtered_triple_3d = [sub_2d for sub_3d in filtered_triple_4d[:self.args.entity] for sub_2d in sub_3d[:self.args.pruning]] # 带symbol len = 4
+                        keywords_used = data[index]['keywords'][:self.args.entity]
+                    data[index]['keywords_used'] = keywords_used
+                    data[index]['filtered_retrieve_result_2d'] = filtered_retrieve_result_2d # 给大模型的句子，带symbol
+                    data[index]['filtered_triple_4d'] = filtered_triple_4d # 带symbol len = 4
+                    data[index]['filtered_retrieve_result'] = filtered_retrieve_result
+                    data[index]['filtered_triple_3d'] = filtered_triple_3d
+                    data[index]['filtered_probs'] = []
+                    data[index]['filtered_dict'] = []
+                    data[index]['pt_list_standard'] = []
+                    data[index]['sim_map'] = []
+                    data[index]['score_map'] = []
+
+                    # 一跳三元组
+                    seen = set()
+                    triplet_unique = []   
+                    for path_triple in filtered_triple_3d:
+                        for triple in path_triple:
+                            h, r, t, direction = triple
+
+                            if direction == '->':
+                                head, tail = h, t
+                            elif direction == '<-':
+                                head, tail = t, h
+                            else:
+                                continue
+                            sentence_text = f"{head} {r.replace('_', ' ')} {tail}"
+                            if sentence_text in seen:
+                                continue
+                            seen.add(sentence_text)
+                            triplet_unique.append((head, r, tail))
+                    triplet_unique.sort(key=lambda x: (x[0], x[2])) 
+
+                    triplet_unique_batch.append(triplet_unique)
+                    filtered_retrieve_result_batch.append(filtered_retrieve_result)
+                    # filtered_triple_3d_batch.append(filtered_triple_3d)
+                    data[index]['nebula_retrieve_time'] = nebula_retrieve_time
+                    data[index]['filter_retrieve_time'] = filter_retrieve_time
+                    nebula_retrieve_total_time.append(nebula_retrieve_time)
+                    filter_retrieve_total_time.append(filter_retrieve_time)
+                    nebula_retrieve_batch_time += nebula_retrieve_time
+                    filter_retrieve_batch_time += filter_retrieve_time
+            else:    
+                for i, index in enumerate(range(start_index, end_index)):
+                    if self.args.retrieve_path == 'basic':
+                        filtered_retrieve_result, filtered_triple_3d, nebula_retrieve_time, filter_retrieve_time  = self.retrieve_path_with_keywords_module(method = self.args.retrieve_path, question=self.dataset.query[index], keywords=data[index]['keywords'], path_depth = self.args.hop, pruning=self.args.pruning, threshold=self.args.simThreshold, score_threshold = self.args.scoreThreshold, score_weight = self.args.score_weight, top_k_per_entity=self.args.top_k_per_entity) # 10*30
+
+                        data[index]['filtered_retrieve_result'] = filtered_retrieve_result # 给大模型的句子，带symbol
+                        data[index]['filtered_triple_3d'] = filtered_triple_3d # 带symbol len = 4
+                        data[index]['filtered_probs'] = []
+                        data[index]['filtered_dict'] = []
+                        data[index]['pt_list_standard'] = []
+                        data[index]['sim_map'] = []
+                        data[index]['score_map'] = []
+                        # 一些用于分析的指标
+                        # logger.log(f"len(triple_result) : {len(triple_result)}")
+                        # logger.log(f"max_score: {max_score}, min_score: {min_score}, median_score: {median_score}, mean_score: {mean_score}")
+                        # triple_result_average += len(triple_result)
+                        
+                    elif self.args.retrieve_path == 'standard':
+                        filtered_retrieve_result, filtered_triple_3d, filtered_probs, filtered_dict, pt_list_standard, sim_map, score_map, nebula_retrieve_time, filter_retrieve_time = self.retrieve_path_with_keywords_module(method = self.args.retrieve_path, question=self.dataset.query[index], keywords=data[index]['keywords'], path_depth = self.args.hop, pruning=self.args.pruning, threshold=self.args.simThreshold, score_threshold = self.args.scoreThreshold, score_weight = self.args.score_weight, top_k_per_entity=self.args.top_k_per_entity) # 10*30
+                        data[index]['filtered_retrieve_result'] = filtered_retrieve_result # 给大模型的句子，带symbol
+                        data[index]['filtered_triple_3d'] = filtered_triple_3d # 带symbol len = 4
+                        data[index]['filtered_probs'] = filtered_probs
+                        data[index]['filtered_dict'] = filtered_dict
+                        data[index]['pt_list_standard'] = pt_list_standard
+                        data[index]['sim_map'] = sim_map
+                        data[index]['score_map'] = score_map
+                        
+                        # logger.log(f"filtered_probs : {json.dumps(filtered_probs, indent=2)}")
+                        # logger.log(f"filtered_dict : {json.dumps(filtered_dict, indent=2)}")
+                        # logger.log(f"pt_list_standard : {json.dumps(pt_list_standard, indent=2)}")
+
+                    # 一跳三元组
+                    seen = set()
+                    triplet_unique = []   
+                    for path_triple in filtered_triple_3d:
+                        for triple in path_triple:
+                            h, r, t, direction = triple
+
+                            if direction == '->':
+                                head, tail = h, t
+                            elif direction == '<-':
+                                head, tail = t, h
+                            else:
+                                continue
+                            sentence_text = f"{head} {r.replace('_', ' ')} {tail}"
+                            if sentence_text in seen:
+                                continue
+                            seen.add(sentence_text)
+                            triplet_unique.append((head, r, tail))
+                    triplet_unique.sort(key=lambda x: (x[0], x[2])) 
+
+                    triplet_unique_batch.append(triplet_unique)
+                    filtered_retrieve_result_batch.append(filtered_retrieve_result)
+                    # filtered_triple_3d_batch.append(filtered_triple_3d)
+                    data[index]['nebula_retrieve_time'] = nebula_retrieve_time
+                    data[index]['filter_retrieve_time'] = filter_retrieve_time
+                    nebula_retrieve_total_time.append(nebula_retrieve_time)
+                    filter_retrieve_total_time.append(filter_retrieve_time)
+                    nebula_retrieve_batch_time += nebula_retrieve_time
+                    filter_retrieve_batch_time += filter_retrieve_time
+            logger.log(f"nebula retrieve time for batch: {nebula_retrieve_batch_time} seconds")
+            logger.log(f"filter retrieve time for batch: {filter_retrieve_batch_time} seconds")
+
+            if self.args.evo_data:
+                for i, index in enumerate(range(start_index, end_index)):
+                    print(f"Processing index: {new_to_old_map[index] if self.args.only_error else index}")
+                    logger.log(f"\n\n-------------index : {index}")
+                    if self.args.only_error: 
+                        logger.log(f"\n\n-------------fact index : {new_to_old_map[index]}")
+                    # logger.log(f"keywords: {data[index]['keywords']}")
+                    logger.log(f"keyword_time: {data[index]['keyword_time']}")
+                    logger.log(f"nebula_retrieve_time: {data[index]['nebula_retrieve_time']}")
+                    logger.log(f"filter_retrieve_time: {data[index]['filter_retrieve_time']}")
+                    logger.log(f"query: {data[index]['query']}")
+                    logger.log(f"keywords : {data[index]['keywords']}")
+                    logger.log(f"filtered_retrieve_result : {json.dumps(data[index]['filtered_retrieve_result'], indent=2)}")
+
+                    with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}_add_data.json", "a", encoding="utf-8") as f:
+                        f.write(f"{json.dumps(data[index], ensure_ascii=False)}\n")  
+                continue # 后续跳过，不要问答，只要检索结果
+    
+            # 问答
+            # if self.args.graphrag_response == "basic":
+            #     response_one, num_input_tokens, response_time = self.graphrag.chat_without_stream_with_triplets(self.dataset.query[index], filtered_retrieve_result)
+            if self.args.graphrag_response == "basic_shared_prefix" :
+                response, prompt_len, response_time = self.graphrag.chat_without_stream_with_triplets_shared_prefix_batch(self.dataset.query[start_index: end_index], filtered_retrieve_result_batch)
+                for i, index in enumerate(range(start_index, end_index)):
+                    data[index]['response'] = response[i]
+                    data[index]['prompt_tokens'] = prompt_len[i]
+                    data[index]['response_time'] = response_time/len(response)
+                    forward_prompt.append(prompt_len[i])
+                    self.response.append(response[i])
+
+                    # 对错判断
+                    if self.args.dataset_name == 'dragonball':
+                        flag_label = self.checkanswer_rougel(response[i], self.dataset.answer[index])
+                        data[index]['label'] = flag_label
+                        labels_list.append(flag_label)
+                    else:
+                        answer_use.append(self.dataset.answer[index])
+                        flag_label = self.checkanswer(response[i], self.dataset.answer[index])
+                        flag_TF = sum(flag_label) == len(flag_label)
+                        if flag_TF:
+                            acc_list.append(1)
+                        else:
+                            acc_list.append(0)
+                            error_index.append(new_to_old_map[index] if self.args.only_error else index)
+                        data[index]['label'] = flag_TF
+
+
+                        ## 添加 f1 score 计算
+                        if self.args.f1:
+                            data[index]['f1_score'] = self.compute_one_f1_squad_v1(str(index), response[i], self.dataset.answer[index])
+                            f1_list.append(data[index]['f1_score'])
+                        if self.args.human:
+                            # 添加人工反馈
+                            if self.args.human_advanced:
+                                human_feedback_response_batch, human_prompt_len, human_feedback_response_time = self.human_feedback_qwen3_5_flash([self.dataset.query[index]], [self.response[index]], [self.dataset.answer[index]], [flag_TF])
+                            else:
+                                human_feedback_response_batch, human_prompt_len, human_feedback_response_time = self.graphrag.human_feedback([self.dataset.query[index]], [self.response[index]], [self.dataset.answer[index]], [flag_TF])
+                            human_list.append(human_feedback_response_batch[0])
+                            data[index]['human_feedback'] = human_feedback_response_batch[0]
+
+
+            logger.log(f"forward response time for batch: {response_time} seconds")
+            forward_response_total_time.append(response_time)
+
+            # 特殊cost统计用的，正常不需要 diff
+            if self.args.cost:
+                response, prompt_len, response_time = self.graphrag.chat_without_stream_with_feedback_diff_batch(self.dataset.query[start_index: end_index], self.response[start_index: end_index])
+                for i, index in enumerate(range(start_index, end_index)):
+                    data[index]['response_diff'] = response[i]
+                    data[index]['prompt_tokens_diff'] = prompt_len[i]
+                    data[index]['response_time_diff'] = response_time/len(response)
+                    diff_prompt.append(prompt_len[i])
+                    
+                logger.log(f"diff response time for batch: {response_time} seconds")
+                diff_response_total_time.append(response_time)
+                    
+
+            # 统计大模型模拟和人类的对齐水平
+            if self.args.align_human:
+                response, prompt_len, response_time = self.graphrag.chat_without_stream_align_human_batch(self.dataset.query[start_index: end_index], self.dataset.answer[start_index: end_index], self.response[start_index: end_index])
+                for i, index in enumerate(range(start_index, end_index)):
+                    data[index]['response_align_human'] = response[i].strip()
+                    data[index]['prompt_tokens_align_human'] = prompt_len[i]
+                    data[index]['response_time_align_human'] = response_time/len(response)
+                    align_human_prompt.append(prompt_len[i])
+
+                    # 对错判断
+                    if self.args.dataset_name == 'dragonball':
+                        pass
+                    else:
+                        align_human_flag = 0
+                        if ((acc_list[index] == 1) and int(response[i].strip()) in [4,5]) or ((acc_list[index] == 0) and int(response[i].strip()) in [1,2]):
+                            align_human_flag = 1
+                            
+                        align_human_acc.append(align_human_flag)
+                        data[index]['label_align_human'] = bool(align_human_flag)
+                        
+                logger.log(f"align human response time for batch: {response_time} seconds")
+                align_human_response_total_time.append(response_time)
+            
+            # 反馈问答 暂未反馈到三元组 没考虑noise
+            if self.args.feedback:
+                if self.args.feedback_process == 'standard_for_path_shared_prefix':
+                    feedback_response_batch, prompt_len, feedback_response_time = self.graphrag.chat_without_stream_for_socre_feedback_standard_shared_prefix_batch(self.dataset.query[start_index: end_index], self.response[start_index: end_index], filtered_retrieve_result_batch)
+
+                    # for i, index in enumerate(range(start_index, end_index)):
+                    #     data[index]['feedback_response'] = feedback_response_batch[i]
+                    #     data[index]['feedback_prompt_tokens'] = prompt_len[i]
+                    #     data[index]['feedback_response_time'] = feedback_response_time/len(feedback_response_batch)
+                    #     feedback_prompt.append(prompt_len[i])
+                    # feedback_response_total_time.append(feedback_response_time)
+                elif self.args.feedback_process == "basic_for_triplet_shared_prefix":
+                    feedback_response_batch, prompt_len, feedback_response_time = self.graphrag.chat_without_stream_for_socre_feedback_basic_shared_prefix_batch(self.dataset.query[start_index: end_index], self.response[start_index: end_index], triplet_unique_batch)
+
+                    # for i, index in enumerate(range(start_index, end_index)):
+                    #     data[index]['feedback_response'] = feedback_response_batch[i]
+                    #     data[index]['feedback_prompt_tokens'] = prompt_len[i]
+                    #     data[index]['feedback_response_time'] = feedback_response_time/len(feedback_response_batch)
+                    #     feedback_prompt.append(prompt_len[i])
+                    # feedback_response_total_time.append(feedback_response_time)
+                elif not self.args.f1 and not self.args.human and self.args.feedback_process == "leaderboardStrategy":
+                    feedback_response_batch, prompt_len, feedback_response_time = self.graphrag.chat_without_stream_for_leaderboardStrategy_feedback_shared_prefix_batch(self.dataset.query[start_index: end_index], self.response[start_index: end_index], triplet_unique_batch, acc_list[start_index: end_index])
+
+                    # for i, index in enumerate(range(start_index, end_index)):
+                    #     data[index]['feedback_response'] = feedback_response_batch[i]
+                    #     data[index]['feedback_prompt_tokens'] = prompt_len[i]
+                    #     data[index]['feedback_response_time'] = feedback_response_time/len(feedback_response_batch)
+                    #     feedback_prompt.append(prompt_len[i])
+                    # feedback_response_total_time.append(feedback_response_time)
+                elif self.args.feedback_process == "leaderboardStrategy_abaltion":
+                    feedback_response_batch, prompt_len, feedback_response_time = self.graphrag.chat_without_stream_for_leaderboardStrategy_feedback_shared_prefix_batch_abaltion(self.dataset.query[start_index: end_index], self.response[start_index: end_index], triplet_unique_batch, acc_list[start_index: end_index])
+
+                    # for i, index in enumerate(range(start_index, end_index)):
+                    #     data[index]['feedback_response'] = feedback_response_batch[i]
+                    #     data[index]['feedback_prompt_tokens'] = prompt_len[i]
+                    #     data[index]['feedback_response_time'] = feedback_response_time/len(feedback_response_batch)
+                    #     feedback_prompt.append(prompt_len[i])
+                    # feedback_response_total_time.append(feedback_response_time)
+                elif self.args.f1 and self.args.feedback_process == "leaderboardStrategy":
+                    feedback_response_batch, prompt_len, feedback_response_time = self.graphrag.chat_without_stream_for_leaderboardStrategy_f1_feedback_shared_prefix_batch(self.dataset.query[start_index: end_index], self.response[start_index: end_index], triplet_unique_batch, f1_list[start_index: end_index])
+                elif self.args.human and self.args.feedback_process == "leaderboardStrategy":
+                    feedback_response_batch, prompt_len, feedback_response_time = self.graphrag.chat_without_stream_for_leaderboardStrategy_human_feedback_shared_prefix_batch(self.dataset.query[start_index: end_index], self.response[start_index: end_index], triplet_unique_batch, human_list[start_index: end_index])
+                
+                for i, index in enumerate(range(start_index, end_index)):
+                    data[index]['feedback_response'] = feedback_response_batch[i]
+                    data[index]['feedback_prompt_tokens'] = prompt_len[i]
+                    data[index]['feedback_response_time'] = feedback_response_time/len(feedback_response_batch)
+                    feedback_prompt.append(prompt_len[i])
+                feedback_response_total_time.append(feedback_response_time)
+
+                logger.log(f"feedback response time for batch: {feedback_response_time} seconds")
+
+            # 记录整个batch的log
+            for i, index in enumerate(range(start_index, end_index)):
+                print(f"Processing index: {new_to_old_map[index] if self.args.only_error else index}")
+                logger.log(f"\n\n-------------index : {skip_index + index}")
+                if self.args.only_error: 
+                    logger.log(f"-------------fact index : {new_to_old_map[index]}")
+                # logger.log(f"keywords: {data[index]['keywords']}")
+                logger.log(f"keyword_time: {data[index]['keyword_time']}")
+                logger.log(f"nebula_retrieve_time: {data[index]['nebula_retrieve_time']}")
+                logger.log(f"filter_retrieve_time: {data[index]['filter_retrieve_time']}")
+                logger.log(f"query: {data[index]['query']}")
+                logger.log(f"prompt_tokens: {data[index]['prompt_tokens']}")
+                logger.log(f"keywords : {data[index]['keywords']}")
+                if self.args.evo_no_retrieve or self.args.evo_case or self.args.depcache_case:
+                    logger.log(f"keywords_used : {data[index]['keywords_used']}")
+                logger.log(f"filtered_retrieve_result : {json.dumps(data[index]['filtered_retrieve_result'], indent=2)}")
+                logger.log(f"answer: {data[index]['answer']}")
+                logger.log(f"response: {data[index]['response']}")
+                logger.log(f"graph rag reaponse {data[index]['label']}")
+                if self.args.cost:
+                    logger.log(f"diff cost: {data[index]['prompt_tokens_diff']}")
+                if self.args.align_human:
+                    logger.log(f"align human response: {data[index]['response_align_human']}")
+                    logger.log(f"align human acc: {data[index]['label_align_human']}")
+                    logger.log(f"prompt tokens align human: {data[index]['prompt_tokens_align_human']}")
+                if self.args.f1:
+                    logger.log(f"f1 score: {data[index]['f1_score']}")
+                if self.args.human:
+                    logger.log(f"human feedback: {data[index]['human_feedback']}")
+  
+                    
+                # 处理冗余
+                if self.args.redundancy:
+                    delete_relationship_num_tmp, redundancy_time = self.redundant_process(method=self.args.redundant_process, filtered_triple_3d=data[index]["filtered_triple_3d"], index=new_to_old_map[index] if self.args.only_error else index)
+                    delete_relationship_num.append(delete_relationship_num_tmp)
+                    redundancy_total_time.append(redundancy_time)
+                    
+
+                # 反馈处理
+                if self.args.feedback:
+                    if self.args.feedback_process == 'standard_for_path_shared_prefix' or self.args.feedback_process == 'basic_for_triplet_shared_prefix' or self.args.feedback_process == "leaderboardStrategy" or self.args.feedback_process == "leaderboardStrategy_abaltion":
+                        feedback_process_start_time = time.perf_counter()
+                        self.feedback_process_one(
+                            method = self.args.feedback_process,
+                            filtered_retrieve_result = filtered_retrieve_result_batch[i] if self.args.feedback_process == "standard_for_path_shared_prefix" else triplet_unique_batch[i],
+                            response_dict = data[index]["feedback_response"],
+                            filtered_triple_3d = data[index]['filtered_triple_3d'],
+                            flag_TF = data[index]['label'], 
+                            feedback_noise = (new_to_old_map[index] if self.args.only_error else index) in feedback_noise, 
+                            filtered_probs = data[index]['filtered_probs'], 
+                            filtered_dict = data[index]['filtered_dict'], 
+                            pt_list_standard = data[index]['pt_list_standard'], 
+                            args_param = self.args, 
+                            sim_map = data[index]['sim_map'], 
+                            score_map = data[index]['score_map'],)
+                        feedback_process_end_time = time.perf_counter()
+                        feedback_process_time = feedback_process_end_time - feedback_process_start_time
+                        logger.log(f"feedback_process_time: {feedback_process_time} seconds")
+                        feedback_process_total_time.append(feedback_process_time)
+
+            # 总是被打断，没招了
+            # 报错data json数据
+            # if self.args.similar:
+            #     if self.args.evo_case:
+            #         with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}_{self.args.entity}_{self.args.pruning}.json", "w", encoding="utf-8") as f:
+            #             f.write(json.dumps(data, indent=2))
+            #     elif self.args.depcache_case:
+            #         with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_depcache_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}_{self.args.entity}_{self.args.pruning}.json", "w", encoding="utf-8") as f:
+            #             f.write(json.dumps(data, indent=2))
+            #     else:
+            #         with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}.json", "w", encoding="utf-8") as f:
+            #             f.write(json.dumps(data, indent=2))
+            # else:
+            #     if self.args.evo_case:
+            #         with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}_{self.args.entity}_{self.args.pruning}.json", "w", encoding="utf-8") as f:
+            #             f.write(json.dumps(data, indent=2))
+            #     elif self.args.depcache_case:
+            #         with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_depcache_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}_{self.args.entity}_{self.args.pruning}.json", "w", encoding="utf-8") as f:
+            #             f.write(json.dumps(data, indent=2))
+            #     else:
+            #         with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}.json", "w", encoding="utf-8") as f:
+            #             f.write(json.dumps(data, indent=2))
+                        
+            # # 保存三元组数据
+            # if self.args.feedback:    
+            #     with open(f"./logs/{self.args.algorithm}/triplets/{self.args.space_name}_{self.args.iteration+1}.json", "w", encoding="utf-8") as file:
+            #         json.dump(self.triplets_score_modify, file, ensure_ascii=False, indent=2)       
+        
+        
+        self.short_cut_for_graphdatabase()
+        
+        # self.response 全面替代 data
+        logger.log(f"\n\n-----------------------keywords_total_time: {sum(keywords_total_time)/len(data)}-----------------------")
+        logger.log(f"-----------------------nebula retrieve_total_time: {sum(nebula_retrieve_total_time)/len(data)}-----------------------")
+        logger.log(f"-----------------------filter retrieve_total_time: {sum(filter_retrieve_total_time)/len(data)}-----------------------")
+        
+        if self.args.similar:
+            if self.args.evo_case:
+                with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}_{self.args.entity}_{self.args.pruning}.json", "w", encoding="utf-8") as f:
+                    f.write(json.dumps(data, indent=2))
+            elif self.args.depcache_case:
+                with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_depcache_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}_{self.args.entity}_{self.args.pruning}.json", "w", encoding="utf-8") as f:
+                    f.write(json.dumps(data, indent=2))
+            else:
+                with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_similar_{self.args.iteration}.json", "w", encoding="utf-8") as f:
+                    f.write(json.dumps(data, indent=2))
+        else:
+            if self.args.evo_case:
+                with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}_{self.args.entity}_{self.args.pruning}.json", "w", encoding="utf-8") as f:
+                    f.write(json.dumps(data, indent=2))
+            elif self.args.depcache_case:
+                with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_depcache_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}_{self.args.entity}_{self.args.pruning}.json", "w", encoding="utf-8") as f:
+                    f.write(json.dumps(data, indent=2))
+            else:
+                with open(f"./logs/{self.args.algorithm}/stage/{self.args.llm}_{self.args.option}_{self.args.algorithm}_{self.args.space_name}_{self.args.iteration}.json", "w", encoding="utf-8") as f:
+                    f.write(json.dumps(data, indent=2))
+                    
+        if self.args.evo_data:
+            return
+        
+        logger.log(f"-----------------------forward_response_total_time: {sum(forward_response_total_time)/len(data)}-----------------------")
+
+        logger.log(f"\n\n-----------------------accuracy : {sum(acc_list)/len(data)} acc query: {sum(acc_list)} / total query: {len(data)}-----------------------")
+        logger.log(f"-----------------------forward prompt: {sum(forward_prompt)/len(data)}-----------------------")
+        if self.args.feedback:
+            logger.log(f"-----------------------feedback prompt: {sum(feedback_prompt)/len(data)}-----------------------")
+
+        
+        if self.args.redundancy:
+            logger.log(f"-----------------------avg_redundancy_total_time: {sum(redundancy_total_time)/len(data)}-----------------------")
+            logger.log(f"-----------------------avg_delete_relationship_num: {sum(delete_relationship_num)/len(data)}-----------------------")
+        if self.args.feedback:
+            logger.log(f"-----------------------feedback_response_total_time: {sum(feedback_response_total_time)/len(data)}-----------------------")
+            logger.log(f"-----------------------feedback_process_total_time: {sum(feedback_process_total_time)/len(data)}-----------------------")
+        if self.args.cost:
+            logger.log(f"-----------------------diff prompt cost: {sum(diff_prompt)/len(data)}-----------------------")
+            logger.log(f"-----------------------diff response total time: {sum(diff_response_total_time)/len(data)}-----------------------")
+        if self.args.align_human:
+            logger.log(f"-----------------------align_human accuracy: {sum(align_human_acc)/len(data)}-----------------------")
+            logger.log(f"-----------------------align_human prompt cost: {sum(align_human_prompt)/len(data)}-----------------------")
+            logger.log(f"-----------------------align_human response total time: {sum(align_human_response_total_time)/len(data)}-----------------------")
+        
+        
+        if self.args.feedback:    
+            with open(f"./logs/{self.args.algorithm}/triplets/{self.args.space_name}_{self.args.iteration+1}.json", "w", encoding="utf-8") as file:
+                json.dump(self.triplets_score_modify, file, ensure_ascii=False, indent=2)
+        
+        if self.args.only_error:
+            with open(f"./logs/{self.args.algorithm}/stage/error_index_{self.args.space_name}_{self.args.llm}_{self.args.iteration}.json", 'w', encoding='utf-8') as file:
+                file.write(json.dumps(error_index, indent=2))
+
+        if self.args.dataset_name == 'dragonball':
+            accuracy = self.get_accuracy_rougel(labels_list)
+            logger.log(f"----------accuracy rougel ...------------\n{accuracy}")
+        elif self.args.dataset_name == 'metaqa':
+            # 分 hop1 200 hop2 100 hop3 100
+            # hop1 300 hop2 300
+            
+            print(f"query_number: {len(data)}")
+            for range_start, range_end in [[0,300],[300,600]]:
+                response_list = []
+                answer_list = []
+                range_acc = []
+                for i in range(range_start, min(len(data), range_end)):
+                    response_item = {}
+                    answer_item = {}
+                    response_item['id'] = str(i)
+                    response_item["prediction_text"] = self.response[i]
+                    response_item["no_answer_probability"] = 0.0   # 'no_answer_probability'
+                    response_list.append(response_item)
+                    reference_answer_item = {}
+                    reference_answer_item['text'] = self.combine_answer_formats(self.dataset.answer[i], delimiter=', ')
+                    # reference_answer_item['text'] = self.combine_answer_formats(answer_use[i], delimiter=', ')
+                    reference_answer_item['answer_start'] = [0] * len(reference_answer_item['text'])
+                    answer_item['id'] = str(i)
+                    answer_item['answers'] = reference_answer_item
+                    answer_list.append(answer_item)
+                    range_acc.append(acc_list[i])
+                squad_v2_metric = load("squad_v2")
+                if response_list and answer_list:
+                    results_v2 = squad_v2_metric.compute(predictions = response_list, references = answer_list)
+                    logger.log(f"--------squad_v2 em f1 ... range[{range_start},{range_end}]------------\n{json.dumps(results_v2, indent=2)}")
+                # if range_acc:
+                    logger.log(f"--------accuracy range[{range_start},{range_end}]: {sum(range_acc)/len(range_acc)}-----------------------")
+        else:
+            # EM F1
+            response_list = []
+            answer_list = []
+            print(f"query_number: {len(data)}")
+            for i in range(len(data)):
+                response_item = {}
+                answer_item = {}
+                response_item['id'] = str(i)
+                response_item["prediction_text"] = self.response[i]
+                response_item["no_answer_probability"] = 0.0   # 'no_answer_probability'
+                response_list.append(response_item)
+                reference_answer_item = {}
+                reference_answer_item['text'] = self.combine_answer_formats(self.dataset.answer[i], delimiter=', ')
+                # reference_answer_item['text'] = self.combine_answer_formats(answer_use[i], delimiter=', ')
+                reference_answer_item['answer_start'] = [0] * len(reference_answer_item['text'])
+                answer_item['id'] = str(i)
+                answer_item['answers'] = reference_answer_item
+                answer_list.append(answer_item)
+            squad_v2_metric = load("squad_v2")
+            results_v2 = squad_v2_metric.compute(predictions = response_list, references = answer_list)
+            logger.log(f"--------squad_v2 em f1 ...------------\n{json.dumps(results_v2, indent=2)}")
+            
+    def human_feedback_qwen3_5_flash(self, query: List[str], response: List[str], answer: List[str], TF_list: List[int]):
+        context_batch = []
+        prompt_system_batch = []
+        prompt_user_batch = []
+        for i in range(len(query)):
+            prompt_system = score_feedback_by_human_system
+            prompt_user = score_feedback_by_human_user.format(query = query[i], answer = json.dumps(answer[i]), response = response[i], label = str(TF_list[i]))
+            
+            prompt_system_batch.append(prompt_system)
+            prompt_user_batch.append(prompt_user)
+            # print(f"-----prompt----\n{prompt_system}\n{prompt_user}")
+
+        output = []
+        prompt_len = []
+        response_batch = []
+        generate_time = 0
+        retry = 1
+        while retry <= 3:
+            try:
+                # output = self._llm.chat_with_ai(prompt)
+                response_batch, prompt_len, generate_time = self.llm_human.chat_with_ai_with_system(prompt_system_batch, prompt_user_batch)
+                # print(f"feedback response_batch: {response_batch}")
+                # output, prompt_len, generate_len, end2end_time, generate_time, prefill_time, decode_time, wait_scheduled_time = self._llm.chat_with_ai_with_system(prompt_system, prompt_user)
+                for i in range(len(response_batch)):
+                    # print(f"chat_without_stream_for_leaderboardStrategy_feedback_shared_prefix_batch {i} feedback response {response_batch[i]}")
+                    try:
+                        # res_parsed_str = response_batch[i].strip("`\n ").split('\n')
+                        res_parsed_str = next((line for line in response_batch[i].strip("`\n ").split('\n') if line.strip()), '3')
+                        # res_parsed = int(next((s.strip("`\n ") for s in res_parsed_str.split(',') if s.strip()), 3))
+                        res_parsed = int(res_parsed_str.strip("` "))
+
+                    except Exception as e:
+                        print(f"Parse error: {e} | Response: {response_batch[i]}")
+                        res_parsed = 3
+                    output.append(res_parsed)
+
+                return output, prompt_len, generate_time
+            except Exception as e:
+                print(f"feedback_standard_shared_prefix_batch output chat error: {e}\nllm response: {response_batch}")
+                retry += 1       
+        return [], [], 0
+
+
+    def compute_one_f1_squad_v1(self,
+        qid: str,
+        prediction_text: str,
+        gold_texts: List[str],
+        metric = load("squad"),
+    ) -> float:
+        gold_texts = self.combine_answer_formats(gold_texts, delimiter=', ')
+        reference_answer_item = {
+            "text": gold_texts,
+            "answer_start": [0] * len(gold_texts),
+        }
+        pred = [{"id": qid, "prediction_text": prediction_text}]
+        ref = [{"id": qid, "answers": reference_answer_item}]
+        out = metric.compute(predictions=pred, references=ref)
+        return round(float(out["f1"])/100, 4)
+        
 
     def check_one_response(self, response, answer):
         # print(f"response\n{response}")
@@ -6332,6 +7670,222 @@ class KGModify:
         logger.log(f"--------redundancy reduction avg------------\n{sum(redundancy_reduction)/len(redundancy_reduction)}")
         logger.log(f"--------redundancy reduction rate avg------------\n{sum(redundancy_reduction_rate)/len(redundancy_reduction_rate)}")
         logger.log(f"--------redundancy reduction rate avg 2 ------------\n{sum(redundancy_reduction)/sum(seen_last_num)}")
+
+
+    def iteration_change_statistics(self,):
+
+        if self.args.dataset_name == 'rgb':
+            end = 5
+        elif self.args.dataset_name == 'multihop':
+            end = 4
+        elif self.args.dataset_name == 'hotpotqa600':
+            end = 6
+
+        with open(f"./logs/{self.args.dataset_name}_redundancy/Meta-Llama-3-8B-Instruct_kg_modify_llama_reproduce_forword_{self.args.dataset_name}_0.json", 'r', encoding='utf-8') as f:
+            retriver_data_last = json.load(f)
+        with open(f"./logs/{self.args.dataset_name}_redundancy/Meta-Llama-3-8B-Instruct_kg_modify_llama_reproduce_forword_{self.args.dataset_name}_{end}.json", 'r', encoding='utf-8') as f:
+            retriver_data = json.load(f)
+
+        logger = Logger(f"./statistics/{self.args.option}_{self.args.dataset_name}_iteration_change_statistics_{self.args.iteration}") # only_relationship_
+
+        seen_last_num = []  #起始总数
+        seen_num = [] #结束总数
+        seen_last_only_num = []
+        seen_only_num = []
+        seen_both_num = []
+        redundancy_reduction = []
+        redundancy_reduction_rate = []
+        # 现在以三元组为粒度进行统计
+
+        for index in range(len(retriver_data_last)):
+            # if index > 2:
+            #     break
+            one_hop_sentence_2d = []
+            one_hop_sentence_list = []
+            one_hop_sentence_str = ""
+            seen_last = set()
+            # print(f"filtered_triple_3d: {json.dumps(filtered_triple_3d, indent=2)}")
+            
+            if self.args.statistics_path:
+                for path in retriver_data_last[index]['filtered_retrieve_result']:
+                    if path not in seen_last:
+                        seen_last.add(path)
+            else:
+                sentence_id = 0
+                for path_triple in retriver_data_last[index]['filtered_triple_3d']:
+                    for triple in path_triple:
+                        sentence = ""
+                        if triple[3] == '->':
+                            sentence = triple[0]+' '+triple[1].replace("_"," ")+' '+triple[2]
+                        elif triple[3] == '<-':
+                            sentence = triple[2]+' '+triple[1].replace("_"," ")+' '+triple[0]
+                        if sentence not in seen_last:
+                            seen_last.add(sentence)
+                        # one_hop_sentence_2d.append(triple)
+                        # one_hop_sentence_list.append(sentence)
+                        # one_hop_sentence_str = one_hop_sentence_str + str(sentence_id) + ': ' + sentence + '\n'
+                        # sentence_id += 1
+
+            seen = set()
+            if self.args.statistics_path:
+                for path in retriver_data[index]['filtered_retrieve_result']:
+                    if path not in seen:
+                        seen.add(path)
+            else:
+                sentence_id = 0
+                for path_triple in retriver_data[index]['filtered_triple_3d']:
+                    for triple in path_triple:
+                        sentence = ""
+                        if triple[3] == '->':
+                            sentence = triple[0]+' '+triple[1].replace("_"," ")+' '+triple[2]
+                        elif triple[3] == '<-':
+                            sentence = triple[2]+' '+triple[1].replace("_"," ")+' '+triple[0]
+                        if sentence not in seen:
+                            seen.add(sentence)
+
+            # seen_last_str = ''
+            # for s in seen_last:
+            #     seen_last_str += f'{s}\n'
+            # seen_str = ''
+            # for s in seen:
+            #     seen_str += f'{s}\n'
+            # diff = seen_last - seen
+            # diff_str = ''
+            # for s in diff_str:
+            #     diff_str += f'{s}\n'
+
+            # 1. 计算共有元素数量
+            common_count = len(seen_last & seen)  # 或者 len(seen_last.intersection(seen))
+
+            # 2. 计算只在 seen_last 中的元素数量
+            only_in_seen_last = len(seen_last - seen)  # 或者 len(seen_last.difference(seen))
+
+            # 3. 计算只在 seen 中的元素数量
+            only_in_seen = len(seen - seen_last)  # 或者 len(seen.difference(seen_last))
+
+
+            
+            seen_last_num.append(len(seen_last))
+            seen_num.append(len(seen))
+            seen_last_only_num.append(only_in_seen_last)
+            seen_only_num.append(only_in_seen)
+            seen_both_num.append(common_count)
+
+            # redundancy_reduction.append(len(diff))
+            # redundancy_reduction_rate.append(len(diff)/len(seen_last))
+
+            # logger.log(f"--------retriver one hop last {len(seen_last)}------------\n{json.dumps(list(seen_last), indent=2)}")
+            # logger.log(f"--------retriver one hop {len(seen)}------------\n{json.dumps(list(seen), indent=2)}")
+            # logger.log(f"--------diff(in last not in now) {len(diff)}------------\n{json.dumps(list(diff), indent=2)}")
+            # logger.log(f"--------redundancy reduction------------\n{len(diff)/len(seen_last)}")
+            logger.log(f"--------seen_last num------------\n{len(seen_last)}")
+            logger.log(f"--------seen num------------\n{len(seen)}")
+            logger.log(f"--------seen_last only num------------\n{only_in_seen_last}")
+            logger.log(f"--------seen only num------------\n{only_in_seen}")
+            logger.log(f"--------seen both num------------\n{common_count}")
+        # logger.log(f"\n\n-----end------\n--------retriver one hop last avg------------\n{sum(seen_last_num)/len(seen_last_num)}")
+        # logger.log(f"--------redundancy reduction avg------------\n{sum(redundancy_reduction)/len(redundancy_reduction)}")
+        # logger.log(f"--------redundancy reduction rate avg------------\n{sum(redundancy_reduction_rate)/len(redundancy_reduction_rate)}")
+        # logger.log(f"--------redundancy reduction rate avg 2 ------------\n{sum(redundancy_reduction)/sum(seen_last_num)}")
+        logger.log(f"\n------------seen_last num total: {sum(seen_last_num)}--------seen_last num avg: {sum(seen_last_num)/len(retriver_data_last)}")
+        logger.log(f"\n------------seen num total: {sum(seen_num)}--------seen num avg: {sum(seen_num)/len(retriver_data_last)}")
+        logger.log(f"\n------------seen_last only num total: {sum(seen_last_only_num)}--------seen_last only num avg: {sum(seen_last_only_num)/len(retriver_data_last)}")
+        logger.log(f"\n------------seen only num total: {sum(seen_only_num)}--------seen only num avg: {sum(seen_only_num)/len(retriver_data_last)}")
+        logger.log(f"\n------------seen both num total: {sum(seen_both_num)}--------seen both num avg: {sum(seen_both_num)/len(retriver_data_last)}")
+
+        logger.log(f"\n------------Retention rate avg: {sum(seen_both_num)/ sum(seen_last_num) }")
+        logger.log(f"\n------------New information rate avg: {sum(seen_only_num)/ sum(seen_num) }")
+        logger.log(f"\n------------Disappear rate avg: {sum(seen_last_only_num)/ sum(seen_last_num) }")
+
+
+
+    def iteration_heat_map_statistics(self,):
+      
+        if self.args.dataset_name == 'rgb':
+            end = 5
+        elif self.args.dataset_name == 'multihop':
+            end = 4
+        elif self.args.dataset_name == 'hotpotqa600':
+            end = 6
+
+        logger = Logger(f"./statistics/{self.args.option}_{self.args.dataset_name}_iteration_heat_map")
+
+        entity_total = set()   # key: entity+relation
+        triplet_total = {}    # key: entity+relation=entity+relation
+
+        for iteration in range(1, end+1):
+
+            with open(f"./logs/{self.args.dataset_name}_redundancy/Meta-Llama-3-8B-Instruct_kg_modify_llama_reproduce_forword_{self.args.dataset_name}_{int(iteration)-1}.json", 'r', encoding='utf-8') as f:
+                retriver_data_last = json.load(f)
+            with open(f"./logs/{self.args.dataset_name}_redundancy/Meta-Llama-3-8B-Instruct_kg_modify_llama_reproduce_forword_{self.args.dataset_name}_{iteration}.json", 'r', encoding='utf-8') as f:
+                retriver_data = json.load(f)
+
+            with open(f"./logs/{self.args.dataset_name}_redundancy/{self.args.dataset_name}_{int(iteration)-1}.json", 'r', encoding='utf-8') as f:
+                triplet_data_last = json.load(f)
+            with open(f"./logs/{self.args.dataset_name}_redundancy/{self.args.dataset_name}_{iteration}.json", 'r', encoding='utf-8') as f:
+                triplet_data = json.load(f)
+
+            entity_total = set()   # key: entity+relation
+            triplet_total = {}    # key: entity+relation=entity+relation
+
+            for index in range(len(retriver_data_last)):
+                one_hop_sentence_2d = []
+                one_hop_sentence_list = []
+                one_hop_sentence_str = ""
+                entity_last = set()
+                seen_last = set()
+                # print(f"filtered_triple_3d: {json.dumps(filtered_triple_3d, indent=2)}")
+                sentence_id = 0
+                for path_triple in retriver_data_last[index]['filtered_triple_3d']:
+                    for triple in path_triple:
+                        sentence = ""
+                        if triple[3] == '->':
+                            sentence = triple[0]+' '+triple[1]+' '+triple[2]
+                        elif triple[3] == '<-':
+                            sentence = triple[2]+' '+triple[1]+' '+triple[0]
+                        if sentence not in seen_last:
+                            seen_last.add(sentence)
+                            # one_hop_sentence_2d.append(triple)
+                            # one_hop_sentence_list.append(sentence)
+                            # one_hop_sentence_str = one_hop_sentence_str + str(sentence_id) + ': ' + sentence + '\n'
+                            # sentence_id += 1
+
+                seen = set()
+                sentence_id = 0
+                for path_triple in retriver_data[index]['filtered_triple_3d']:
+                    for triple in path_triple:
+                        sentence = ""
+                        if triple[3] == '->':
+                            sentence = triple[0]+' '+triple[1]+' '+triple[2]
+                        elif triple[3] == '<-':
+                            sentence = triple[2]+' '+triple[1]+' '+triple[0]
+                        if sentence not in seen:
+                            seen.add(sentence)
+
+                seen_last_str = ''
+                for s in seen_last:
+                    seen_last_str += f'{s}\n'
+                seen_str = ''
+                for s in seen:
+                    seen_str += f'{s}\n'
+                diff = seen_last - seen
+
+        #         diff_str = ''
+        #         for s in diff_str:
+        #             diff_str += f'{s}\n'
+        #         seen_last_num.append(len(seen_last))
+        #         redundancy_reduction.append(len(diff))
+        #         redundancy_reduction_rate.append(len(diff)/len(seen_last))
+
+        #         logger.log(f"--------retriver one hop last {len(seen_last)}------------\n{json.dumps(list(seen_last), indent=2)}")
+        #         logger.log(f"--------retriver one hop {len(seen)}------------\n{json.dumps(list(seen), indent=2)}")
+        #         logger.log(f"--------diff(in last not in now) {len(diff)}------------\n{json.dumps(list(diff), indent=2)}")
+        #         logger.log(f"--------redundancy reduction------------\n{len(diff)/len(seen_last)}")
+        # logger.log(f"\n\n-----end------\n--------retriver one hop last avg------------\n{sum(seen_last_num)/len(seen_last_num)}")
+        # logger.log(f"--------redundancy reduction avg------------\n{sum(redundancy_reduction)/len(redundancy_reduction)}")
+        # logger.log(f"--------redundancy reduction rate avg------------\n{sum(redundancy_reduction_rate)/len(redundancy_reduction_rate)}")
+        # logger.log(f"--------redundancy reduction rate avg 2 ------------\n{sum(redundancy_reduction)/sum(seen_last_num)}")
+    
     
     def iteration_score_statistics(self,):
         # python kg_modify.py --dataset_name rgb --llm qwen3_32b --graphdb nebulagraph --space_name rgb_zyz --option iteration_score_statistics --llmbackend api --iteration 9
@@ -6404,4 +7958,5 @@ class KGModify:
         print(json.dumps(output2, indent = 2))
 
     def short_cut_for_graphdatabase(self):
+        print(f"short_cut_for_graphdatabase")
         pass

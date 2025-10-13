@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1,2"  # 必须在导入 torch 或 vllm 之前设置！
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,2"  # 必须在导入 torch 或 vllm 之前设置！
 from vllm import LLM, SamplingParams
 import json
 import time
@@ -12,7 +12,7 @@ import argparse
 
 def parse_vllm_metrics(metrics):
     # ... (您的 metrics 解析函数保持不变)
-    print(f"metrics: {metrics}")
+    # print(f"metrics: {metrics}")
     arrival_time = metrics.arrival_time
     first_scheduled_time = metrics.first_scheduled_time
     first_token_time = metrics.first_token_time
@@ -40,8 +40,8 @@ def main_batched(args):
     """ 优化后的批量处理版本 """
     print("🚀 Running Batched Version for Maximum Throughput 🚀")
     
-    model_path = "/home/hdd/model/Llama-3.1-8B-Instruct"
-    # model_path = "/home/hdd/model/Qwen2.5-32B-Instruct"
+    # model_path = "/home/hdd/model/Llama-3.1-8B-Instruct"
+    model_path = "/home/hdd/model/Qwen2.5-32B-Instruct"
 
     # 1. 启动 vLLM 模型 (与原代码相同)
     llm = LLM(
@@ -52,7 +52,7 @@ def main_batched(args):
         gpu_memory_utilization=0.95,
         enable_prefix_caching=True,
         swap_space=128,
-        # max_model_len=8192,
+        max_model_len=1024*5, # 8192
         # use_v2_block_manager=True,      # 启用 PagedAttention
         # enable_chunked_prefill=True,    # 启用流式预填充
         # max_num_seqs=128,       # 控制并发序列数
@@ -74,18 +74,18 @@ def main_batched(args):
 
     # 3. 加载数据 (与原代码相同)
     try:
-        with open(f"./logs/stage/Qwen2.5-32B-Instruct_evolve_basic_forward_evolve_shared_prefix_{args.dataset}_0.json", 'r', encoding='utf-8') as file:
-            data_list = json.load(file)
+        # with open(f"./logs/stage/Qwen2.5-32B-Instruct_evolve_basic_forward_evolve_shared_prefix_{args.dataset}_0.json", 'r', encoding='utf-8') as file:
+        #     data_list = json.load(file)
             
-        # if args.dataset == 'rgb':
-        #     with open(f"/home/zhangyz/RAG_2025/logs/rgb/Meta-Llama-3-8B-Instruct_kg_modify_llama_reproduce_forword_rgb_0.json", 'r', encoding='utf-8') as file:
-        #         data_list = json.load(file)
-        # elif args.dataset == "multihop":
-        #     with open(f"/home/zhangyz/RAG_2025/logs/multihop/Meta-Llama-3-8B-Instruct_kg_modify_llama_reproduce_forword_multihop_0.json", 'r', encoding='utf-8') as file:
-        #         data_list = json.load(file)
-        # elif args.dataset == "hotpotqa_1":
-        #     with open(f"/home/zhangyz/RAG_2025/logs/hotpotqa600/Meta-Llama-3-8B-Instruct_kg_modify_llama_reproduce_forword_hotpotqa600_0.json", 'r', encoding='utf-8') as file:
-        #         data_list = json.load(file)
+        if args.dataset == 'rgb_zyz':
+            with open(f"/home/zhangyz/RAG_2025/logs/rgb/Meta-Llama-3-8B-Instruct_kg_modify_llama_reproduce_forword_rgb_0.json", 'r', encoding='utf-8') as file:
+                data_list = json.load(file)
+        elif args.dataset == "multihop_zyz":
+            with open(f"/home/zhangyz/RAG_2025/logs/multihop/Meta-Llama-3-8B-Instruct_kg_modify_llama_reproduce_forword_multihop_0.json", 'r', encoding='utf-8') as file:
+                data_list = json.load(file)
+        elif args.dataset == "hotpotqa_1":
+            with open(f"/home/zhangyz/RAG_2025/logs/hotpotqa600/Meta-Llama-3-8B-Instruct_kg_modify_llama_reproduce_forword_hotpotqa600_0.json", 'r', encoding='utf-8') as file:
+                data_list = json.load(file)
         # else:
         #     with open(f"./logs/stage/Qwen2.5-32B-Instruct_evolve_basic_forward_evolve_shared_prefix_{args.dataset}_0.json", 'r', encoding='utf-8') as file:
         #         data_list = json.load(file)
@@ -132,8 +132,40 @@ def main_batched(args):
     print(f"prompt len: {len(outputs1[0].prompt_token_ids)}")
     print(f"token len: {len(outputs1[0].outputs[0].token_ids)}")
     print(f"num_cached_tokens: {outputs1[0].num_cached_tokens}")
+    print(f"avg token len per request: {sum([len(output.prompt_token_ids) for output in outputs1]) / len(outputs1):.2f}")
+    print(f"avg cached tokens per request: {sum([output.num_cached_tokens for output in outputs1]) / len(outputs1):.2f}")
 
+    # --- 阶段一点五：准备并执行所有 align_human 请求 ---
+    print(f"--- Preparing {len(data_list)} align human prompts for batching... ---")
+    all_align_human_prompts = []
+    # 注意：我们必须保持原始 data_list 和 outputs1 的顺序一致性
+    for data_item, forward_output in zip(data_list, outputs1):
+        # 从第一次请求的结果中获取 response
+        generated_response = forward_output.outputs[0].text
+        cur_align_human_prompt_user = align_human_user_prompt.format(question = data_item['query'], model_answer = generated_response, gold_answer = str(data_item['answer']))
 
+        
+        # 构建完整的prompt
+        if "Qwen2.5" in model_path:
+            full_prompt = qwen2_instruct_system.format(system_instruction=align_human_system_prompt) + qwen2_instruct_user.format(user_instruction=cur_align_human_prompt_user)
+        elif "Llama" in model_path:
+            full_prompt = llama_instruct_system.format(system_instruction=align_human_system_prompt) + llama_instruct_user.format(user_instruction=cur_align_human_prompt_user)
+        all_align_human_prompts.append(full_prompt)
+
+    print("--- Starting Stage 1.5: Generating all align human acc (batched)... ---")
+    batch_align_human_start_time = time.perf_counter()
+    outputs1_5 = llm.generate(all_align_human_prompts, params_2)
+    batch_align_human_end_time = time.perf_counter()
+    print(f"--- Stage 1.5 finished in {batch_align_human_end_time - batch_align_human_start_time:.4f} seconds. ---")
+    print(f"--- Average time per request: {(batch_align_human_end_time - batch_align_human_start_time) / len(data_list):.4f} seconds ---")
+    print(f"answer : {outputs1_5[0].outputs[0].text}")
+    print(f"prompt len: {len(outputs1_5[0].prompt_token_ids)}")
+    print(f"token len: {len(outputs1_5[0].outputs[0].token_ids)}")
+    print(f"num_cached_tokens: {outputs1_5[0].num_cached_tokens}")
+    print(f"avg token len per request: {sum([len(output.prompt_token_ids) for output in outputs1_5]) / len(outputs1_5):.2f}")
+    print(f"avg cached tokens per request: {sum([output.num_cached_tokens for output in outputs1_5]) / len(outputs1_5):.2f}")
+
+    
     # --- 阶段二：准备并执行所有 Feedback 请求 ---
 
     print(f"--- Preparing {len(data_list)} feedback prompts for batching... ---")
@@ -166,11 +198,14 @@ def main_batched(args):
     print(f"token len: {len(outputs2[0].outputs[0].token_ids)}")
     print(f"num_cached_tokens: {outputs2[0].num_cached_tokens}")
 
+    print(f"avg token len per request: {sum([len(output.prompt_token_ids) for output in outputs2]) / len(outputs2):.2f}")
+    print(f"avg cached tokens per request: {sum([output.num_cached_tokens for output in outputs2]) / len(outputs2):.2f}")
 
     # --- 4. 结果处理与指标计算 ---
     
     # 初始化指标列表
     forward_metrics_totals = [[] for _ in range(5)]
+    align_human_metrics_totals = [[] for _ in range(5)]
     feedback_metrics_totals = [[] for _ in range(5)]
 
 
@@ -178,6 +213,7 @@ def main_batched(args):
     print("\n--- Processing Batch Results ---")
     for i in range(len(data_list)):
         forward_output = outputs1[i]
+        align_human_output = outputs1_5[i]
         feedback_output = outputs2[i]
         
         # 解析并累加 Forward 指标
@@ -185,6 +221,11 @@ def main_batched(args):
         for j in range(5):
             forward_metrics_totals[j].append(metrics[j])
             # print(f"{metric_names[j]}_time_forward_item_{i}: {metrics[j]:.4f} seconds")
+        
+        # 解析并累加 align_human 指标
+        metrics = parse_vllm_metrics(align_human_output.metrics)
+        for j in range(5):
+            align_human_metrics_totals[j].append(metrics[j])
             
         # 解析并累加 Feedback 指标
         metrics = parse_vllm_metrics(feedback_output.metrics)
@@ -202,18 +243,23 @@ def main_batched(args):
         #     print("-" * 20)
 
     # 计算并打印平均指标
-    if data_list:
-        metric_names = ["end2end", "generate", "prefill", "decode", "wait_scheduled"]
+    # if data_list:
+    #     metric_names = ["end2end", "generate", "prefill", "decode", "wait_scheduled"]
         
-        print("\n--- Forward Average Times (Batched) ---")
-        for name, totals in zip(metric_names, forward_metrics_totals):
-            avg_time = sum(totals) / len(totals)
-            print(f"  Average {name}_time: {avg_time:.4f} seconds")
+    #     print("\n--- Forward Average Times (Batched) ---")
+    #     for name, totals in zip(metric_names, forward_metrics_totals):
+    #         avg_time = sum(totals) / len(totals)
+    #         print(f"  Average {name}_time: {avg_time:.4f} seconds")
 
-        print("\n--- Feedback Average Times (Batched) ---")
-        for name, totals in zip(metric_names, feedback_metrics_totals):
-            avg_time = sum(totals) / len(totals)
-            print(f"  Average {name}_time: {avg_time:.4f} seconds")
+    #     print("\n--- Align Human Average Times (Batched) ---")
+    #     for name, totals in zip(metric_names, align_human_metrics_totals):
+    #         avg_time = sum(totals) / len(totals)
+    #         print(f"  Average {name}_time: {avg_time:.4f} seconds")
+            
+    #     print("\n--- Feedback Average Times (Batched) ---")
+    #     for name, totals in zip(metric_names, feedback_metrics_totals):
+    #         avg_time = sum(totals) / len(totals)
+    #         print(f"  Average {name}_time: {avg_time:.4f} seconds")
 
 
 if __name__ == "__main__":

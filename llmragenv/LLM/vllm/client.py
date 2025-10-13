@@ -1,6 +1,6 @@
 
-import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1, 2"
+# import os
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0, 2"   # "0, 2"
 import re
 from typing import List, overload
 from overrides import override
@@ -60,30 +60,81 @@ class Vllm(LLMBase):
         #     self.path = "/home/hdd/zhangyz/huggingface_local/models--Qwen--Qwen3-32B/models--Qwen--Qwen3-32B"  # 修改了
         base_url = re.sub(r'/v\d+', '', url)
 
-
-        self.llm = LLM(
-            model=self.path,
-            # model="/home/hdd/model/Meta-Llama-3-8B-Instruct",
-            tensor_parallel_size=2,
-            gpu_memory_utilization=0.95,
-            enable_prefix_caching=True,
-            # disable_custom_all_reduce=True,
-            # enforce_eager=True,
-            swap_space=64,
-            # tokenizer_mode="auto",
-        )
+        # self.type = "Llama"
+        if self.model_name == 'Llama-3.1-70B-Instruct-AWQ':
+            self.llm = LLM(
+                model=self.path,
+                # max_model_len=1024*5, # 32768
+                # max_model_len=1024*12, # 32768
+                max_model_len=8192, # 8192, # 32768 # 16384
+                # max_model_len=8192, # 32768
+                quantization="awq",
+                trust_remote_code=True,
+                tensor_parallel_size=2, # 1
+                gpu_memory_utilization=0.80, # 0.80 0.95  不用检索可以拉倒95%，有检索用0.80
+                enable_prefix_caching=False,   # True
+                # disable_custom_all_reduce=True,
+                # enforce_eager=True,
+                swap_space=64,
+                # tokenizer_mode="auto",
+            )
+        elif self.model_name == 'Llama-3.3-70B-Instruct-FP8':
+            # print(f"-----------{self.model_name}-----------")
+            self.llm = LLM(
+                model=self.path,
+                # max_model_len=1024*5, # 32768
+                # max_model_len=1024*12, # 32768
+                max_model_len=8192, # 32768
+                quantization="fp8",
+                trust_remote_code=True,
+                tensor_parallel_size=2,
+                gpu_memory_utilization=0.85, # 0.95 0.80
+                enable_prefix_caching=False,   # True
+                # disable_custom_all_reduce=True,
+                # enforce_eager=True,
+                swap_space=64,
+                # tokenizer_mode="auto",
+            )
+        elif self.model_name == 'Llama-3-8B-Instruct':
+            self.llm = LLM(
+                model=self.path,
+                max_model_len=8192, # 32768
+                dtype="bfloat16",
+                trust_remote_code=True,
+                tensor_parallel_size=1,
+                gpu_memory_utilization=0.80, # 0.95 0.80
+                enable_prefix_caching=False,   # True
+                swap_space=64,
+            )
+        else:
+            self.llm = LLM(
+                model=self.path,
+                # max_model_len=1024*5, # 32768
+                # max_model_len=1024*12, # 32768
+                max_model_len=8192, # 32768
+                # quantization="awq",
+                dtype="bfloat16",
+                trust_remote_code=True,
+                tensor_parallel_size=2,
+                gpu_memory_utilization=0.80, # 0.95 0.80
+                enable_prefix_caching=False,   # True
+                # disable_custom_all_reduce=True,
+                # enforce_eager=True,
+                swap_space=64,
+                # tokenizer_mode="auto",
+            )
         self.params = SamplingParams(
-            temperature=0.0, 
+            # temperature=0.0,  # 使用默认温度
             max_tokens=256,
             stop=["<|im_end|>", "<|eot_id|>", "<|end_of_text|>", "<|endoftext|>"],
         )
 
         print("Use vllm backend to generate")
         if self.type == 'Qwen2.5' or self.type == 'Qwen3':
-            response = self.chat_with_ai("<|im_start|>user\nwho are you?<|im_end|>\n<|im_start|>assistant")
+            response = self.chat_with_ai("<|im_start|>user\nwho are you?<|im_end|>\n<|im_start|>assistant\n")
             # response = self.chat_with_ai("who are you?")
         elif self.type == 'Llama':
-            response = self.chat_with_ai("<|start_header_id|>user<|end_header_id|>\nwho are you?<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>")
+            response = self.chat_with_ai("<|start_header_id|>user<|end_header_id|>\nwho are you?<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n")
             # response = self.chat_with_ai("who are you?")
         print_text(f"\n test huggingface model {self.model_name} : {response}\n", color='yellow')
 
@@ -109,18 +160,21 @@ class Vllm(LLMBase):
         
     @override
     def chat_with_ai(self, prompt: str, history: List[List[str]] | None = None) -> str | None:
+        start_time = time.time()
+        # print(f"vllm prompt {prompt}")
         outputs = self.llm.generate(
             prompt,
             self.params,
         )
+        end_time = time.time()
         prompt_len = len(outputs[0].prompt_token_ids)
         generate_len = len(outputs[0].outputs[0].token_ids)   
         response = outputs[0].outputs[0].text
-        end2end_time, generate_time, prefill_time, decode_time, wait_scheduled_time = (
-            self.parse_vllm_metrics(outputs[0].metrics)
-        )
-
-        return response, prompt_len, generate_len, end2end_time, generate_time, prefill_time, decode_time, wait_scheduled_time
+        # end2end_time, generate_time, prefill_time, decode_time, wait_scheduled_time = (
+        #     self.parse_vllm_metrics(outputs[0].metrics)
+        # )
+        # return response, prompt_len, generate_len, end2end_time, generate_time, prefill_time, decode_time, wait_scheduled_time
+        return response, prompt_len, end_time - start_time
        
     @override
     def chat_with_ai_with_system(self, prompt_system: str | List[str], prompt_user: str | List[str], history: List[List[str]] | None = None, enable_thinking = False) -> str | None:

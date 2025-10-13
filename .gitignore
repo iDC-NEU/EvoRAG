@@ -1,21 +1,33 @@
-.vscode
-*.log
-# 忽略所有log文件
-*.json
-temp
-# 忽略所有名称为temp的文件夹
-# /config/path-local.yaml
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+/config/config-local.yaml
+/config/path-local.yaml
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+
+# Editors, Python, and runtime state
+.vscode/
+.idea/
 __pycache__/
+*.py[cod]
+*.swp
+*~
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
 
-# 1. 忽略 datset/ 目录下的所有内容
+# Local datasets and experiment output
+/data/
 /dataset/*
-# 2. 取消忽略 rgb 目录
 !/dataset/rgb/
-# 3. 在 rgb/ 内部，忽略所有内容
 /dataset/rgb/*
-# 取消忽略rgb数据集
 !/dataset/rgb/en.json
-
 !/dataset/dataset.py
 !/dataset/extract_triples.py
 !/dataset/generate_similar_questions.py
@@ -23,33 +35,36 @@ __pycache__/
 !/dataset/Hotpotqa_process.py
 !/dataset/MuSique_Ans_process.py
 !/dataset/MuSique_Full_process.py
+/logs/
+/logs_bak/
+*.log
+nohup.out
 
-/llmragenv/LLM/vllm_bak.py
-/llmragenv/LLM/vllm_batch_run.py
-/llmragenv/LLM/vllm_batch.py
+# Generated reports and charts at the repository root
+/*.pdf
+/*.png
+/*.csv
+/heat_map*.py
+/download.py
 
-/logs_bak
-# /logs/*
-# !/logs/.gitkeep
-
-
-# 忽略 logs 下所有内容
-/logs/*
-# 保留这两个子目录
-!/logs/basic_batch/
-!/logs/standard_batch/
-# 但忽略它们下面所有文件
-# /logs/basic_batch/**/*      
-# /logs/standard_batch/**/*   
-# 再次取消忽略 .gitkeep
-!/logs/basic_batch/**/.gitkeep
-!/logs/standard_batch/**/.gitkeep
-
-
+# Local experiments and backup files
+/KGModify/KGModify copy.py
+/llmragenv/Cons_Retri/*_bak.py
+/llmragenv/LLM/api/index.html*
+/llmragenv/LLM/api/test.py
+/llmragenv/LLM/api/test_*.py
+/llmragenv/vllm_batch_avg.py
 test.py
+/templates/triplet.json
 *.sh
 !run_batch.sh
 !run_noise.sh
 !run_case_pruning.sh
 !run_case_entity.sh
 
+# Downloaded archives and local temporary directories
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+/temp/

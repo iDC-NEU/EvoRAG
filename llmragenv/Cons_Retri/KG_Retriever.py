@@ -27,6 +27,7 @@ import statistics
 import re
 import time
 import math
+import torch
 
 
 keyword_extract_prompt = (
@@ -101,6 +102,8 @@ embed_model_small = None
 embed_model_MiniLM = None
 
 def get_text_embeddings(texts, embed_model_name="BAAI/bge-large-en-v1.5", step=400, args = None):
+    if args:
+        step = args.embed_batch_size
     global embed_model
     # embed_model = None
     if not embed_model:
@@ -117,6 +120,7 @@ def get_text_embeddings(texts, embed_model_name="BAAI/bge-large-en-v1.5", step=4
         all_embeddings += embeddings
         
     return all_embeddings
+    # return embed_model.get_embeddings(texts)
 
 def get_text_embedding(text, embed_model_name="BAAI/bge-large-en-v1.5", args = None):
     global embed_model
@@ -472,11 +476,15 @@ class RetrieverGraph(object):
     # 通过带symbol的path过滤，返回带symbol的path
     def retrieve_path_with_keywords_v1_data(self, question, keywords = [], path_depth = 2, pruning = None, build_node = False):
         self.pruning = pruning
+        # print(f"keywords: {keywords}, path_depth: {path_depth}, pruning: {pruning}")
+        nebula_retrieve_time_start = time.perf_counter()
 
         rel_map = self.graph_database.get_rel_map(entities=keywords, depth=path_depth, limit=1000000)
         # clean_rel_map, sentence_to_triple_4d, sentences_2d = self.graph_database.clean_rel_map(rel_map)
         # clean_rel_map_list = [sublist for sublist in clean_rel_map.values()]
-
+        nebula_retrieve_time_end = time.perf_counter()
+        filter_time_start = time.perf_counter()
+        
         clean_rel_map, sentence_to_triple_4d, sentences_2d = self.graph_database.clean_rel_map(rel_map, keywords = keywords) # 加入keywords确保按照keywords排序，可以一一对应
         clean_rel_map_list = []
         for keyword in keywords:
@@ -491,7 +499,11 @@ class RetrieverGraph(object):
         if pruning > 0:
             # for sentences_list  in sentences_2d: # 不要通过句子过滤了，还是改为path
             for path_list, sentence_to_triple_3d, sentences in zip(clean_rel_map_list, sentence_to_triple_4d, sentences_2d):
-                rel_scores = self.semantic_pruning_sentences_batch(question, path_list, rel_embeddings = None, topk = pruning, batch_size = 8)
+                # print(f"type path_list {type(path_list)} \nlen path_list: {len(path_list)}")
+                # print(f"type sentence_to_triple_3d {type(sentence_to_triple_3d)} \nsentence_to_triple_3d: {sentence_to_triple_3d}")
+                # print(f"type sentences {type(sentences)} \nsentences: {sentences}")
+                # rel_scores = self.semantic_pruning_sentences_batch_fast(question, path_list, rel_embeddings = None, topk = pruning, batch_size = 8)
+                rel_scores = self.semantic_pruning_sentences_batch(question, path_list, rel_embeddings = None, topk = pruning, batch_size = self.embedding.embed_batch_size)
                 result_filter_tmp_for_4d = []
                 result_triple_tmp_for_4d = []
                 result_sentence_tmp_for_4d = []
@@ -505,8 +517,8 @@ class RetrieverGraph(object):
                 result_filter.append(result_filter_tmp_for_4d)
                 result_triple.append(result_triple_tmp_for_4d)
                 result_sentence.append(result_sentence_tmp_for_4d)
-                            
-        return result_filter, result_triple, result_sentence
+        filter_time_end = time.perf_counter()
+        return result_filter, result_triple, result_sentence, nebula_retrieve_time_end - nebula_retrieve_time_start, filter_time_end - filter_time_start
     
     def sort_strings_by_frequency_unique(self, string_list):
         from collections import Counter
@@ -578,9 +590,9 @@ class RetrieverGraph(object):
                     path.append(f" - {rel} -> ")
                     path.append(e2)
                 else:
-                    path.append(e2)
+                    path.append(e1)  # e2
                     path.append(f" <- {rel} - ")
-                    path.append(e1)
+                    path.append(e2)  # e1
             else:
                 # 检查是否能连接到末尾
                 last_node = path[-1]
@@ -647,7 +659,7 @@ class RetrieverGraph(object):
                 selected_embeddings = None
 
                 # rel_scores, max_score, min_score, median_score, mean_score = self.semantic_pruning_sentences_batch_v2(question, sentences_list, rel_embeddings=None, batch_size=8, threshold = threshold)
-                rel_scores, max_score, min_score, median_score, mean_score = self.semantic_pruning_sentences_batch_v2(question, sentences_list, rel_embeddings=selected_embeddings, batch_size=128, threshold = threshold)
+                rel_scores, max_score, min_score, median_score, mean_score = self.semantic_pruning_sentences_batch_v2(question, sentences_list, rel_embeddings=selected_embeddings, batch_size=self.embedding.embed_batch_size, threshold = threshold) # 128
                 if max_score:
                     max_score_avg.append(max_score)
                     min_score_avg.append(min_score)
@@ -748,8 +760,8 @@ class RetrieverGraph(object):
 
         # return result_filter, result_final, result_final_to_triple_3d, result_final_to_triple_3d_more, max_score, min_score, median_score, mean_score
         filter_retrieve_end_time = time.perf_counter()
-        return result_final_symbol, result_final_to_triple_3d, nebula_retrieve_end_time - nebula_retrieve_start_time, filter_retrieve_end_time - filter_retrieve_start_time # 返回symbol形式的结果
-        # return result_final, result_final_to_triple_3d, nebula_retrieve_end_time - nebula_retrieve_start_time, filter_retrieve_end_time - filter_retrieve_start_time # 返回句子形式的结果
+        # return result_final_symbol, result_final_to_triple_3d, nebula_retrieve_end_time - nebula_retrieve_start_time, filter_retrieve_end_time - filter_retrieve_start_time # 返回symbol形式的结果
+        return result_final, result_final_to_triple_3d, nebula_retrieve_end_time - nebula_retrieve_start_time, filter_retrieve_end_time - filter_retrieve_start_time # 返回句子形式的结果
         # return result_final, result_final_to_triple_3d
 
     # +++
@@ -826,7 +838,7 @@ class RetrieverGraph(object):
                 sentences=sentence_list,
                 # rel_embeddings=selected_embeddings if selected_embeddings else None,
                 rel_embeddings=selected_embeddings,
-                batch_size=8,
+                batch_size=self.embedding.embed_batch_size, # 8
             )
             
             # for idx, sim_score in embedding_similarity:
@@ -965,6 +977,155 @@ class RetrieverGraph(object):
             filter_retrieve_end_time = time.perf_counter()
             return topk_symbols, topk_triples, topk_probs, result_dict, pt_list_standard, sim_map, score_map, nebula_retrieve_end_time - nebula_retrieve_start_time, filter_retrieve_end_time - filter_retrieve_start_time
 
+    # +++
+    # 使用相似度和分数联合过滤，对于每个实体保留pruning个(改用带symbol的path而不是sentence)
+    def retrieve_path_with_keywords_v3_data(self, question, keywords = [], clean_rel_map_list_data = [], sentence_to_triple_4d_data = [], path_depth = 2, pruning = None, threshold=0.65, score_threshold = 95, build_node = False, method = False):
+        nebula_retrieve_start_time = time.perf_counter()
+        self.pruning = pruning
+        triplets_score = self.triplets_score
+
+        if method: # for train cases
+            clean_rel_map_list = clean_rel_map_list_data
+            sentence_to_triple_4d = sentence_to_triple_4d_data
+        else: # for data
+            rel_map = self.graph_database.get_rel_map(entities=keywords, depth=path_depth, limit=1000000)
+            clean_rel_map, sentence_to_triple_4d, sentences_2d = self.graph_database.clean_rel_map(rel_map, keywords = keywords) # 已经有了一次过滤，加入关键词可以实现输出路径按照关键词排序
+            # clean_rel_map_list = [sublist for sublist in clean_rel_map.values()] # 发现了一个问题，clean_rel_map如果按照关键词排序，字典按照插入顺序排序则是对应的，如果无序则不对应，保险起见不这么写
+            clean_rel_map_list = []
+            for keyword in keywords:
+                if keyword in clean_rel_map:
+                    clean_rel_map_list.append(clean_rel_map[keyword])
+            
+        nebula_retrieve_end_time = time.perf_counter()
+        filter_retrieve_start_time = time.perf_counter()
+
+        max_score_avg = []
+        min_score_avg = []
+        median_score_avg = []
+        mean_score_avg = []
+
+        result_filter = []
+        result_final = []
+        result_final_to_triple_3d = []
+        result_final_to_triple_3d_more = []
+        if pruning > 0:
+            # for sentences_list, sentence_to_triple_3d  in zip(sentences_2d, sentence_to_triple_4d):
+            for sentences_list, sentence_to_triple_3d  in zip(clean_rel_map_list, sentence_to_triple_4d):
+                if len(sentences_list) == 0:
+                    result_final.append([])
+                    result_final_to_triple_3d.append([])
+                    continue
+                
+                rel_scores, max_score, min_score, median_score, mean_score = self.semantic_pruning_sentences_batch_v2(question, sentences_list, rel_embeddings=None, batch_size=self.embedding.embed_batch_size, threshold = threshold)
+                if max_score:
+                    max_score_avg.append(max_score)
+                    min_score_avg.append(min_score)
+                    median_score_avg.append(median_score)
+                    mean_score_avg.append(mean_score)
+
+                index = 0
+                index_tmp = []
+                result_final_tmp = []
+                result_final_to_triple_tmp = []
+                for idx, score in rel_scores:
+                    result_filter.append(sentence_to_triple_3d[idx])
+                    mapped_sim = (score + 1) * 50  # 映射到0-100 score变量使用完毕
+                    
+                    score = 1
+                    count = 0
+                    flag = 0
+                    triples_tmp = []
+                    sentence_str = ''
+                    for triple in sentence_to_triple_3d[idx]:
+                        if not (len(triple) == 4):
+                            print(f"The length of the triple is not 4: {triple}")
+                            flag = 1
+                            break
+                        if triple[3] == "->":
+                            key = f"{triple[0]} {triple[1]} {triple[2]}"
+                            sentence_tmp = f"{triple[0]} {triple[1].replace('_',' ')} {triple[2]}"
+                        elif triple[3] == "<-":
+                            key = f"{triple[2]} {triple[1]} {triple[0]}"
+                            sentence_tmp = f"{triple[2]} {triple[1].replace('_',' ')} {triple[0]}"
+                        else:
+                            print(f"The appearance of position and direction symbols in triple: {triple}")
+                            flag = 1
+                            break
+                        if key not in triplets_score:
+                            print(f"triple not exist: {triple}")
+                            flag = 1
+                            break
+                        elif key in triplets_score and triplets_score[key]["score"] < score_threshold: #还是得保留一部分
+                            # flag = 1
+                            continue # 真的不能break
+                        elif key in triplets_score and triplets_score[key]["score"] >= score_threshold:
+                            score *= triplets_score[key]["score"]
+                            count += 1
+                            triples_tmp.append(triple)
+                            if sentence_str:
+                                sentence_str = sentence_str + ", " + sentence_tmp
+                            else:
+                                sentence_str = sentence_tmp
+                    sentence_str += '.'
+                    if flag:
+                        continue
+                    elif count >= 1:
+                        should_skip = False # 做一个子串过滤，但是可能代价非常大啊？
+                        # 就这一块还是没想明白
+                        # for id_tmp, existing_sentence in enumerate(result_final_tmp):
+                        #     if sentence_str == existing_sentence or \
+                        #        sentence_str in existing_sentence:
+                        #         # print(f"    Skipping append for '{sentence_str}' because it matches/is substring/is superstring of '{existing_sentence}'")
+                        #         should_skip = True
+                        #         break # 找到匹配/包含关系，无需再检查
+                        #     elif existing_sentence in sentence_str:
+                        #         index_tmp[id_tmp] = (id_tmp, mapped_sim + (score/(100**(count-1))) )
+                        #         result_final_tmp[id_tmp] = sentence_str
+                        #         result_final_to_triple_tmp[id_tmp] = triples_tmp
+                        #         should_skip = True
+                        #         break
+
+                        if not should_skip:
+                            index_tmp.append((index, mapped_sim + (score/(100**(count-1))) ))
+                            index += 1
+                            # result_final_tmp.append(sentences_list[idx])
+                            # result_final_to_triple_tmp.append(sentence_to_triple_3d[idx])
+                            result_final_tmp.append(sentence_str)
+                            result_final_to_triple_tmp.append(triples_tmp)
+
+                index_tmp.sort(key=lambda x: x[1], reverse=True)
+                result_final_tmp_for_4d = []
+                result_final_to_triple_3d_tmp_for_4d = []
+                for idx, _ in index_tmp[:pruning]:
+                    # result_final.extend(result_final_tmp)   
+                    # result_final_to_triple_3d.extend(result_final_to_triple_tmp)
+                    # result_final.append(result_final_tmp[idx])   
+                    # result_final_to_triple_3d.append(result_final_to_triple_tmp[idx])
+
+                    result_final_tmp_for_4d.append(result_final_tmp[idx])
+                    result_final_to_triple_3d_tmp_for_4d.append(result_final_to_triple_tmp[idx])
+                result_final.append(result_final_tmp_for_4d)
+                result_final_to_triple_3d.append(result_final_to_triple_3d_tmp_for_4d)
+                result_final_to_triple_3d_more_tmp_for_4d = []
+                # for idx, _ in index_tmp[:pruning2]:
+                #     # result_final.extend(result_final_tmp)   
+                #     # result_final_to_triple_3d.extend(result_final_to_triple_tmp)
+                #     # result_final_to_triple_3d_more.append(result_final_to_triple_tmp[idx])
+                #     result_final_to_triple_3d_more_tmp_for_4d.append(result_final_to_triple_tmp[idx])
+                # result_final_to_triple_3d_more.append(result_final_to_triple_3d_more_tmp_for_4d)
+        
+        if max_score_avg:
+            max_score = max(max_score_avg)
+            min_score = min(min_score_avg)
+            median_score = statistics.median(median_score_avg)
+            mean_score = sum(mean_score_avg) / len(mean_score_avg)
+        else:
+            max_score = min_score = median_score = mean_score = None
+
+        filter_retrieve_end_time = time.perf_counter()
+        # return result_filter, result_final, result_final_to_triple_3d, result_final_to_triple_3d_more, max_score, min_score, median_score, mean_score
+        return result_final, result_final_to_triple_3d, nebula_retrieve_end_time - nebula_retrieve_start_time, filter_retrieve_end_time - filter_retrieve_start_time
+    
 
     
     # 使用相似度和分数联合过滤，对于每个实体保留pruning个(改用带symbol的path而不是sentence)
@@ -1047,18 +1208,18 @@ class RetrieverGraph(object):
                     elif count >= 1:
                         should_skip = False # 做一个子串过滤，但是可能代价非常大啊？
                         # 就这一块还是没想明白
-                        for id_tmp, existing_sentence in enumerate(result_final_tmp):
-                            if sentence_str == existing_sentence or \
-                               sentence_str in existing_sentence:
-                                # print(f"    Skipping append for '{sentence_str}' because it matches/is substring/is superstring of '{existing_sentence}'")
-                                should_skip = True
-                                break # 找到匹配/包含关系，无需再检查
-                            elif existing_sentence in sentence_str:
-                                index_tmp[id_tmp] = (id_tmp, mapped_sim + (score/(100**(count-1))) )
-                                result_final_tmp[id_tmp] = sentence_str
-                                result_final_to_triple_tmp[id_tmp] = triples_tmp
-                                should_skip = True
-                                break
+                        # for id_tmp, existing_sentence in enumerate(result_final_tmp):
+                        #     if sentence_str == existing_sentence or \
+                        #        sentence_str in existing_sentence:
+                        #         # print(f"    Skipping append for '{sentence_str}' because it matches/is substring/is superstring of '{existing_sentence}'")
+                        #         should_skip = True
+                        #         break # 找到匹配/包含关系，无需再检查
+                        #     elif existing_sentence in sentence_str:
+                        #         index_tmp[id_tmp] = (id_tmp, mapped_sim + (score/(100**(count-1))) )
+                        #         result_final_tmp[id_tmp] = sentence_str
+                        #         result_final_to_triple_tmp[id_tmp] = triples_tmp
+                        #         should_skip = True
+                        #         break
 
                         if not should_skip:
                             index_tmp.append((index, mapped_sim + (score/(100**(count-1))) ))
@@ -1082,12 +1243,12 @@ class RetrieverGraph(object):
                 result_final.append(result_final_tmp_for_4d)
                 result_final_to_triple_3d.append(result_final_to_triple_3d_tmp_for_4d)
                 result_final_to_triple_3d_more_tmp_for_4d = []
-                for idx, _ in index_tmp[:pruning2]:
-                    # result_final.extend(result_final_tmp)   
-                    # result_final_to_triple_3d.extend(result_final_to_triple_tmp)
-                    # result_final_to_triple_3d_more.append(result_final_to_triple_tmp[idx])
-                    result_final_to_triple_3d_more_tmp_for_4d.append(result_final_to_triple_tmp[idx])
-                result_final_to_triple_3d_more.append(result_final_to_triple_3d_more_tmp_for_4d)
+                # for idx, _ in index_tmp[:pruning2]:
+                #     # result_final.extend(result_final_tmp)   
+                #     # result_final_to_triple_3d.extend(result_final_to_triple_tmp)
+                #     # result_final_to_triple_3d_more.append(result_final_to_triple_tmp[idx])
+                #     result_final_to_triple_3d_more_tmp_for_4d.append(result_final_to_triple_tmp[idx])
+                # result_final_to_triple_3d_more.append(result_final_to_triple_3d_more_tmp_for_4d)
         
         if max_score_avg:
             max_score = max(max_score_avg)
@@ -1097,7 +1258,8 @@ class RetrieverGraph(object):
         else:
             max_score = min_score = median_score = mean_score = None
 
-        return result_filter, result_final, result_final_to_triple_3d, result_final_to_triple_3d_more, max_score, min_score, median_score, mean_score
+        # return result_filter, result_final, result_final_to_triple_3d, result_final_to_triple_3d_more, max_score, min_score, median_score, mean_score
+        return result_final, result_final_to_triple_3d
     
     def get_nodes(self):
         return self.nodes
@@ -1120,6 +1282,26 @@ class RetrieverGraph(object):
         similarity_rounded = round(similarity, 6)
 
         return similarity_rounded # [-1,1]
+    
+    def calculate_batch_similarity(self, query_embedding, context_embeddings):
+        """
+        query_embedding: 单个向量 (1, D)
+        context_embeddings: 候选向量矩阵 (N, D)
+        """
+        
+        # 转换为 Tensor 并移至 GPU
+        q = torch.tensor(query_embedding).to(self.device)
+        c = torch.tensor(context_embeddings).to(self.device)
+        
+        # 1. 归一化 (如果是单位向量，这步可以省略)
+        q = torch.nn.functional.normalize(q, p=2, dim=-1)
+        c = torch.nn.functional.normalize(c, p=2, dim=-1)
+        
+        # 2. 矩阵点积即为余弦相似度
+        # (1, D) * (D, N) -> (1, N)
+        similarities = torch.mm(q.unsqueeze(0), c.transpose(0, 1))
+        
+        return similarities.cpu().numpy() # (1, N)
 
     def filter_paths_by_score(self, query, paths, score_list):
         filter_list, filter_list_score = self.graph_database.filter_paths_by_score(paths, score_list)
@@ -1688,7 +1870,8 @@ class RetrieverGraph(object):
             keyword_start_time = time.perf_counter()
             entity_res =  []
             for q_item in question:
-                sorted_all_entity_scores = self.semantic_pruning_entities_batch(q_item, entities_list, rel_embeddings=entity_embeddings, topk=max_keywords, batch_size=128)
+                # sorted_all_entity_scores = self.semantic_pruning_entities_batch_fast(q_item, entities_list, rel_embeddings=entity_embeddings, topk=max_keywords, batch_size=self.embedding.embed_batch_size) # batch_size=128 2048
+                sorted_all_entity_scores = self.semantic_pruning_entities_batch(q_item, entities_list, rel_embeddings=entity_embeddings, topk=max_keywords, batch_size=self.embedding.embed_batch_size) # batch_size=128 2048
                 entity_res.append([rel for rel, _ in sorted_all_entity_scores])
             keyword_end_time = time.perf_counter()
             return entity_res, keyword_end_time - keyword_start_time
@@ -1706,9 +1889,44 @@ class RetrieverGraph(object):
             
             #### two method
             # sorted_all_entity_scores = self.semantic_pruning_triplets_batch(question, entities_list, rel_embeddings=entity_embeddings, topk=max_keywords, batch_size=8)
-            sorted_all_entity_scores = self.semantic_pruning_entities_batch(question, entities_list, rel_embeddings=entity_embeddings, topk=max_keywords, batch_size=128)
+            sorted_all_entity_scores = self.semantic_pruning_entities_batch(question, entities_list, rel_embeddings=entity_embeddings, topk=max_keywords, batch_size=self.embedding.embed_batch_size)
+            # sorted_all_entity_scores = self.semantic_pruning_entities_batch_fast(question, entities_list, rel_embeddings=entity_embeddings, topk=max_keywords, batch_size=128)
             keyword_end_time = time.perf_counter()
             return [rel for rel, _ in sorted_all_entity_scores], keyword_end_time - keyword_start_time
+        
+    def extract_keywords_with_embedding_find_entity_batch(self, query_list, max_keywords=5):
+        if isinstance(query_list, str):
+            return self.extract_keywords_with_embedding_find_entity(query_list, max_keywords)
+        else:
+            start_time = time.perf_counter()
+            
+            # 1. 一次性获取所有 query 的 embedding (形状: [batch_size, embed_dim])
+            # 假设你的 embedding 工具支持 batch 传入
+            query_embeddings = get_text_embeddings(query_list) 
+            query_embeddings = np.array(query_embeddings) 
+
+            # 2. 获取实体 embedding (形状: [num_entities, embed_dim])
+            entity_embeddings = np.array(self.graph_database.entity_embeddings)
+            entities_list = [str(entity) for entity in sorted(self.graph_database.entities)]
+
+            # 3. 矩阵乘法计算余弦相似度 (Batch 计算)
+            # 结果形状: [batch_size, num_entities]
+            norm_q = query_embeddings / np.linalg.norm(query_embeddings, axis=1, keepdims=True)
+            norm_e = entity_embeddings / np.linalg.norm(entity_embeddings, axis=1, keepdims=True)
+            similarity_matrix = np.dot(norm_q, norm_e.T)
+
+            # 4. 针对每一行取 topk
+            entity_res = []
+            for i in range(len(query_list)):
+                scores = similarity_matrix[i]
+                # 获取最大的前 k 个索引
+                top_k_indices = np.argpartition(scores, -max_keywords)[-max_keywords:]
+                # 按分数排序
+                top_k_indices = top_k_indices[np.argsort(scores[top_k_indices])[::-1]]
+                
+                entity_res.append([entities_list[idx] for idx in top_k_indices])
+
+            return entity_res, time.perf_counter() - start_time
 
     def semantic_pruning_triplets(self, question,
                               triplets,
@@ -1790,6 +2008,50 @@ class RetrieverGraph(object):
         sorted_all_rel_scores = sorted(all_rel_scores, key=lambda x: x[1], reverse=True)
         return sorted_all_rel_scores[:topk]
     
+    def semantic_pruning_entities_batch_fast(self, question, triplets, rel_embeddings=None, topk=30, batch_size=8):
+        """
+        针对三元组/实体的语义剪枝加速版
+        后缀含义：
+        gpu_vec: 使用 GPU 矩阵运算，无分批循环，全量计算
+        """
+        # 1. 获取问题和实体的 Embedding (保持原逻辑)
+        question_embed = np.array(get_text_embedding(question, args=self.embedding)).reshape(1, -1)
+
+        if rel_embeddings is None:
+            rel_embeddings = get_text_embeddings(triplets, args=self.embedding)
+
+        # 确保转换为 numpy 矩阵 (N, D)
+        rel_embeddings = np.array(rel_embeddings)
+        if rel_embeddings.ndim == 1:
+            rel_embeddings = rel_embeddings.reshape(1, -1)
+
+        # 2. 调用高性能计算引擎 (一次性算出所有三元组的分数)
+        # 调用之前定义的 get_similarity_scores_torch_vec
+        all_scores = embed_model.get_top_k_similar(question_embed, rel_embeddings)
+
+        # 3. 高效排序取 TopK
+        # 计算实际需要返回的数量，防止 topk 溢出
+        num_to_take = min(topk, len(all_scores)) if topk is not None else len(all_scores)
+        
+        if num_to_take < len(all_scores):
+            # 使用 argpartition 进行局部排序，在大数据量下比全量排序快极多
+            top_indices = np.argpartition(all_scores, -num_to_take)[-num_to_take:]
+            # 对选出的 TopK 进行从高到低精排序
+            top_indices = top_indices[np.argsort(all_scores[top_indices])[::-1]]
+        else:
+            # 数据量较小时直接全排序
+            top_indices = np.argsort(all_scores)[::-1]
+
+        # 4. 组合结果并返回
+        # 返回格式：[(triplet, score), ...]
+        # 注意：这里直接通过索引从原始 triplets 列表中取值，避免了循环中的 zip 操作
+        results = [
+            (triplets[idx], float(all_scores[idx])) 
+            for idx in top_indices
+        ]
+
+        return results
+    
     # +++ 返回排序后的索引和分数，无过滤阈值
     def semantic_pruning_sentences_batch(self, question, sentences, rel_embeddings=None, topk=None, batch_size=8):
         # get_text_embeddings 已经批处理 这里只是余弦相似度计算批处理，作用不大
@@ -1818,6 +2080,35 @@ class RetrieverGraph(object):
 
         sorted_all_rel_scores = sorted(all_rel_scores, key=lambda x: x[1], reverse=True)
         return sorted_all_rel_scores[:topk]
+    
+    # +++ 返回排序后的索引和分数，无过滤阈值 加速 尤其是数据传输
+    def semantic_pruning_sentences_batch_fast(self, question, sentences, rel_embeddings=None, topk=None, batch_size=8):
+        # get_text_embeddings 已经批处理 这里只是余弦相似度计算批处理，作用不大
+        question_embed = np.array(get_text_embedding(question, args=self.embedding)).reshape(1, -1)
+
+        if rel_embeddings is None:
+            rel_embeddings = get_text_embeddings(sentences, args=self.embedding)
+        
+        # 确保转换为 numpy 矩阵 (N, D)
+        rel_embeddings = np.array(rel_embeddings)
+        if rel_embeddings.ndim == 1:
+            rel_embeddings = rel_embeddings.reshape(1, -1)
+            
+        all_scores = embed_model.get_top_k_similar(question_embed, rel_embeddings)
+        
+        num_to_take = topk if topk is not None else len(all_scores)
+        if topk is not None and topk < len(all_scores):
+            # 局部排序：只保证前 num_to_take 个是最大的
+            top_indices = np.argpartition(all_scores, -num_to_take)[-num_to_take:]
+            # 局部排序后再进行精细排序
+            top_indices = top_indices[np.argsort(all_scores[top_indices])[::-1]]
+        else:
+            top_indices = np.argsort(all_scores)[::-1]
+
+        # 4. 构建返回结果 [(index, score), ...]
+        top_k_results = list(zip(top_indices.tolist(), all_scores[top_indices].tolist()))
+
+        return top_k_results
     
     # +++ 直接返回嵌入，无排序
     def semantic_pruning_sentences_batch_v3(self, question, sentences, rel_embeddings=None, batch_size=8):

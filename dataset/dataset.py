@@ -21,7 +21,9 @@ RGB_PATH_FACT = os.path.join(Path(__file__).parent, "rgb", "en_fact.json")
 MULTIHOP_PATH = os.path.join(Path(__file__).parent, "multihop", "dataset", "MultiHopRAG.json")
 MULTIHOP_CONTEXT_PATH = os.path.join(Path(__file__).parent, "multihop", "dataset", "corpus.json")
 HOTPOTQA600_PATH = os.path.join(Path(__file__).parent, "hotpotqa_graph", "hotpotqa_600.json")
-MULTIHOP_INFERENCE_PATH = os.path.join(Path(__file__).parent, "multihop", "multihop_inference.json")\
+HOTPOTQA1M_PATH = os.path.join(Path(__file__).parent, "hotpotqa", "hotpot_dev_distractor_v1.json")
+MULTIHOP_INFERENCE_PATH = os.path.join(Path(__file__).parent, "multihop", "multihop_inference.json")
+
 
 DRAGONBALL_PATH = os.path.join(Path(__file__).parent, "dragonball", "dragonball_queries.jsonl")
 DRAGONBALL_CONTEXT_PATH = os.path.join(Path(__file__).parent, "dragonball", "dragonball_docs.jsonl")
@@ -95,6 +97,15 @@ class Dataset:
             data = Hotpot_dataset()
             self.query = data.query
             self.answer = data.answer
+        elif self.dataset_name == "hotpotqa1M":
+            with open(HOTPOTQA1M_PATH , 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            filter_type = "bridge"
+            for item in data:
+                if item.get("type") != filter_type:
+                    continue
+                self.query.append(item['question'])
+                self.answer.append(item['answer'])
             
         elif self.dataset_name == "hotpotqa600":
             with open(HOTPOTQA600_PATH , 'r', encoding='utf-8') as f:
@@ -264,7 +275,7 @@ class Dataset:
                     for sentence in paragraph[1]:
                         sentence_tmp += sentence
                     context_list.append(sentence_tmp)
-                    self.corpus.append(context_list)
+                self.corpus.append(context_list)
         elif self.dataset_name == 'dragonball':# 这个现在有问题，不是按照每个问题对应的文本块加载的，而是加载了所有的英文问题
             language = 'en'
             with open(DRAGONBALL_CONTEXT_PATH, "r") as file:
