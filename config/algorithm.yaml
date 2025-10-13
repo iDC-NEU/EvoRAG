@@ -2,119 +2,81 @@ server:
   ui_port: 8083
   ui_share: false
 
-
-
 llm:
   zhipu:
     url: https://open.bigmodel.cn/api/paas/v4
     key: YOUR API-KEY
-    # MODEL_NAME=glm-4
 
   moonshot:
     url: https://api.moonshot.cn/v1
     key: YOUR API-KEY
-    # MODEL_NAME=moonshot-v1-8k
 
   baichuan:
     url: https://api.baichuan-ai.com/v1
     key: YOUR API-KEY
-    # MODEL_NAME=Baichuan4
 
   qwen:
     url: https://dashscope.aliyuncs.com/compatible-mode/v1
     key: YOUR API-KEY
-    # MODEL_NAME=qwen-long
 
   lingyiwanwu:
     url: https://api.lingyiwanwu.com/v1
     key: YOUR API-KEY
-    # MODEL_NAME=yi-large
 
   deepseek:
     url: https://api.deepseek.com
     key: YOUR API-KEY
-    # MODEL_NAME=deepseek-chat
 
   doubao:
     url: https://ark.cn-beijing.volces.com/api/v3
     key: YOUR API-KEY
-    # 注意：对于豆包api，model_name参数填入ENDPOINT_ID，具体申请操作在豆包api官网提供。
-    # MODEL_NAME=
 
   gpt:
     url: https://api.aigc798.com/v1/
     key: YOUR_API_KEY
 
-
   llama:
     url: http://localhost:11434/v1
     key: ollama
-    # url: https://qianfan.baidubce.com/v2
-    # key: YOUR_API_KEY
-    # url: aip.baidubce.com
-    # key: YOUR_API_KEY
-    # MODEL_NAME: llama2:70b
-    # MODEL_NAME=llama2:70b
-
-
-
-
 
 database:
 
   neo4j:
     url: bolt://localhost:7690
     username: neo4j
-    # 注意数字用引号括起来
     password: "12345678"
 
   nebulagraph:
     url: 127.0.0.1:9669
     username: root
-    # 注意数字用引号括起来
     password: "nebula"
-
 
 organization: iDC-NE
 
-
-embedding: # 使用的嵌入模型
+embedding:
   name: "huggingface"
   model: "BAAI/bge-large-en-v1.5"
   dim: 1024
   device: "cuda:0"
-  embed_batch_size: 1024 # 批处理大小 48 4 128 8192
-  num_workers: 4 # 数据加载的线程数
+  embed_batch_size: 1024
+  num_workers: 4
 
+shouldRebuildDatabase: false
 
-shouldRebuildDatabase: false # 是否重建数据库
+score_min: 20
+score_max: 200
+iteration: 0
+use_local_model: true
+entity: 10
+hop: 2
+pruning: 10
+algorithm: "leaderboardStrategy"
+batch_size: 8
 
-score_min: 20 # 最小评分，没啥用，低于阈值就检索不到了，正常来说最多略低于scoreThreshold
-score_max: 200 # 最大评分
-iteration: 0 # 当前迭代次数
-use_local_model: true # 是否使用本地模型
-# entity_num: 10 # 每个问题检索的实体数量
-entity: 10 # 每个问题检索的实体数量
-hop: 2 # 跳数
-pruning: 10 # 每个字体保留的路径数量
-# algorithm: "evolve_basic" # 迭代算法  evolve_basic # 最基础算法，直接加减分 evolve——standard # 标准算法，实现论文公式  evolve_shared_prefix # 共享前缀算法 batch_standard # 批处理标准算法(共享前缀)
-# algorithm: "evolve_standard" 
-# algorithm: "evolve_shared_prefix" 
-# algorithm: "standard_batch"  # 文中算法
-# algorithm: "basic_batch"  # 实际的批处理算法
-algorithm: "leaderboardStrategy"  # 分数算法
-# algorithm: "leaderboardStrategy_abaltion"  # 分数算法 提示词消融实验
-# algorithm: "llm_batch"  # llm only batch
-batch_size: 8 # 批处理大小 8
+redundancy: false
+feedback: true
+rate: 0.0
 
-
-# llm_fb_name: "qwen2.5:32b-instruct-fp16" # "qwen3_32b" # 当前向与反向分离时，前向使用该变量找到上一次反向修改的三元组分数
-# forward_llm: "Meta-Llama-3-8B-Instruct" # 当前向与反向分离时，反向使用该变量找到前向的检索结果 # llm_name
-redundancy: false # 是否处理冗余关系
-feedback: true # 是否进行反馈
-rate: 0.0 # feedback noise rate
-
-# 论文 V-A 的关系中心演化。默认保留全部低分三元组，只软抑制其贡献分数。
 relation_evolution:
   enabled: true
   max_hop: 2
@@ -125,66 +87,59 @@ relation_evolution:
   shortcut_relation_prefix: "shortcut"
   shortcut_label_mode: "llm"
 
-
 llm_batch:
   graphrag_response: "llm_only"
 
-
-
-evolve_basic: # 两阶段llm一直在变，llm_name与llm_fb_name不变
+evolve_basic:
   graphrag_response: "basic"
   extract_keywords: "basic"
   retrieve_path: "basic"
-  simThreshold: 0.55 # 相似度阈值
-  score_weight: 0.5 # 评分权重，0.5表示相似度和评分各占一半
-  scoreThreshold: 70 # 评分阈值
-  redundant_process: "basic_only_relationship_strict" # 仅处理冗余关系，并且严格按照头尾相同分组
-  feedback_process: "basic_for_triplet" # 仅仅对单个三元组评分
-  top_k_per_entity: true # 用不到
-  lr : 5000000 # 用不到
-
-  
+  simThreshold: 0.55
+  score_weight: 0.5
+  scoreThreshold: 70
+  redundant_process: "basic_only_relationship_strict"
+  feedback_process: "basic_for_triplet"
+  top_k_per_entity: true
+  lr : 5000000
 
 evolve_standard:
   graphrag_response: "basic"
   extract_keywords: "basic"
   retrieve_path: "standard"
   simThreshold: 0
-  scoreThreshold: -2 # 用不上
-  score_weight: 0.5 # 评分权重，0.5表示相似度和评分各占一半
-  lr : 5000000 # 学习率
-  redundant_process: "basic_only_relationship_strict" # 仅处理冗余关系，并且严格按照头尾相同分组
-  feedback_process: "standard_for_path" # 对路径进行评分
-  top_k_per_entity: true # 是否对每个实体取前k个路径，true表示取前k个路径，false表示取所有路径前K个
+  scoreThreshold: -2
+  score_weight: 0.5
+  lr : 5000000
+  redundant_process: "basic_only_relationship_strict"
+  feedback_process: "standard_for_path"
+  top_k_per_entity: true
 
 evolve_shared_prefix:
   graphrag_response: "basic_shared_prefix"
   extract_keywords: "basic"
   retrieve_path: "standard"
-  simThreshold: 0 # 相似度阈值
-  score_weight: 0.5 # 评分权重，0.5表示相似度和评分各占一半
-  scoreThreshold: -2 # 用不上
-  redundant_process: "basic_only_relationship_strict" # 仅处理冗余关系，并且严格按照头尾相同分组
-  feedback_process: "standard_for_path_shared_prefix" # 对路径评分
-  top_k_per_entity: true 
+  simThreshold: 0
+  score_weight: 0.5
+  scoreThreshold: -2
+  redundant_process: "basic_only_relationship_strict"
+  feedback_process: "standard_for_path_shared_prefix"
+  top_k_per_entity: true
   lr : 0.5
   loss_epsilon: 1.0e-12
-  
 
-legacy_standard_batch: # 保留原有离散路径评分实现
+legacy_standard_batch:
   graphrag_response: "basic_shared_prefix"
   extract_keywords: "basic"
   retrieve_path: "standard"
-  simThreshold: 0 # 相似度阈值
-  score_weight: 0.5 # 评分权重，0.5表示相似度和评分各占一半
-  scoreThreshold: -2 # 用不上
-  redundant_process: "basic_only_relationship_strict" # 仅处理冗余关系，并且严格按照头尾相同分组
-  feedback_process: "standard_for_path_shared_prefix" # 对路径评分
-  top_k_per_entity: true 
+  simThreshold: 0
+  score_weight: 0.5
+  scoreThreshold: -2
+  redundant_process: "basic_only_relationship_strict"
+  feedback_process: "standard_for_path_shared_prefix"
+  top_k_per_entity: true
   lr : 0.5
   loss_epsilon: 1.0e-12
 
-# 标准方法：连续路径效用、保真度/冲突门控和公式 (2)-(4) 更新。
 standard_batch:
   graphrag_response: "basic_shared_prefix"
   extract_keywords: "basic"
@@ -204,45 +159,39 @@ standard_batch:
     prune_low_score: false
     shortcut_relation_prefix: "shortcut"
     shortcut_label_mode: "llm"
-  
 
-basic_batch: # 基础方法, 优化的  使用中！
+basic_batch:
   graphrag_response: "basic_shared_prefix"
   extract_keywords: "basic"
   retrieve_path: "basic"
-  simThreshold: 0.55 # 相似度阈值
-  # simThreshold: 0 # 相似度阈值
-  score_weight: 0.5 # 评分权重，0.5表示相似度和评分各占一半
-  scoreThreshold: 71 # 评分阈值
-  redundant_process: "basic_only_relationship_strict" # 仅处理冗余关系，并且严格按照头尾相同分组
-  feedback_process: "basic_for_triplet_shared_prefix" # 对单个三元组评分
-  top_k_per_entity: true # 用不到
-  lr : 5000000 # 用不到
+  simThreshold: 0.55
+  score_weight: 0.5
+  scoreThreshold: 71
+  redundant_process: "basic_only_relationship_strict"
+  feedback_process: "basic_for_triplet_shared_prefix"
+  top_k_per_entity: true
+  lr : 5000000
 
-
-leaderboardStrategy: # 准确率方法
+leaderboardStrategy:
   graphrag_response: "basic_shared_prefix"
   extract_keywords: "basic"
   retrieve_path: "basic"
-  # simThreshold: 0.55 # 相似度阈值
-  simThreshold: 0.55 # 相似度阈值  # 0.55
-  score_weight: 0.5 # 评分权重，0.5表示相似度和评分各占一半
-  scoreThreshold: 71 # 评分阈值  71 0
-  redundant_process: "basic_only_relationship_strict" # 仅处理冗余关系，并且严格按照头尾相同分组
-  feedback_process: "leaderboardStrategy" # 对单个三元组评分
-  top_k_per_entity: true # 用不到
-  lr : 5000000 # 用不到
+  simThreshold: 0.55
+  score_weight: 0.5
+  scoreThreshold: 71
+  redundant_process: "basic_only_relationship_strict"
+  feedback_process: "leaderboardStrategy"
+  top_k_per_entity: true
+  lr : 5000000
 
-
-leaderboardStrategy_abaltion: # 准确率方法 提示词三维度消融
+leaderboardStrategy_abaltion:
   graphrag_response: "basic_shared_prefix"
   extract_keywords: "basic"
   retrieve_path: "basic"
-  # simThreshold: 0.55 # 相似度阈值
-  simThreshold: 0.55 # 相似度阈值  # 0.55
-  score_weight: 0.5 # 评分权重，0.5表示相似度和评分各占一半
-  scoreThreshold: 71 # 评分阈值  71 0
-  redundant_process: "basic_only_relationship_strict" # 仅处理冗余关系，并且严格按照头尾相同分组
-  feedback_process: "leaderboardStrategy_abaltion" # 对单个三元组评分
-  top_k_per_entity: true # 用不到
-  lr : 5000000 # 用不到
+  simThreshold: 0.55
+  score_weight: 0.5
+  scoreThreshold: 71
+  redundant_process: "basic_only_relationship_strict"
+  feedback_process: "leaderboardStrategy_abaltion"
+  top_k_per_entity: true
+  lr : 5000000
