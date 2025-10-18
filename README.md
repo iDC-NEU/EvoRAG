@@ -11,13 +11,14 @@
 # EvoRAG: Evolving KG-based RAG with Human Feedback-driven Backpropagation
 
 <p align="center">
-  <img src="./resource/overview.png" width="600" alt="architecture"/>
+  <!-- <img src="./resource/overview.png" width="600" alt="architecture"/> -->
+  <img src="[./resource/overview.png](https://anonymous.4open.science/r/EvoRAG-FD13/resource/overview.png)" width="600" alt="architecture"/>
 </p>
 <p align="center">EvoRAG system overview</p>
 
 Knowledge Graph-based Retrieval-Augmented Generation (KG-RAG) has emerged as a promising paradigm for enhancing LLM reasoning by retrieving multihop paths from knowledge graphs. However, existing KG-RAG frameworks often underperform in
 real-world scenarios because the pre-captured knowledge dependencies are not tailored to the downstream generation task or its evolving requirements. These frameworks struggle to adapt to user intent and lack mechanisms to filter low-contribution knowledge during generation. We observe that human feedback on generated responses offers effective supervision for improving KG quality, as it directly reflects user expectations and provides insights into the correctness and usefulness of the output. However, a key challenge lies in effectively linking response-level feedback to triplet-level updates in the knowledge graph.
-In this work, we propose EvoRAG, a self-evolving KG-RAG framework that leverages human feedback to continuously refine the KG and enhance reasoning accuracy. EvoRAG introduces a feedback-driven backpropagation mechanism that attributes feedback to retrieved paths by measuring their utility for response and propagates this utility back to individual triplets, supporting fine-grained KG refinements towards more adaptive and accurate reasoning. Through EvoRAG, we establish a closed loop that couples human, LLM, and graph data, continuously enhancing the performance and robustness in real-world scenarios. Experimental results show that EvoRAG improves reasoning accuracy by 7.08% over state-of-the-art KG-RAG frameworks.
+In this work, we propose EvoRAG, a self-evolving KG-RAG framework that leverages human feedback to continuously refine the KG and enhance reasoning accuracy. EvoRAG introduces a feedback-driven backpropagation mechanism that attributes feedback to retrieved paths by measuring their utility for response and propagates this utility back to individual triplets, supporting fine-grained KG refinements towards more adaptive and accurate reasoning. Through EvoRAG, we establish a closed loop that couples human, LLM, and graph data, continuously enhancing the performance and robustness in real-world scenarios. Experimental results show that EvoRAG improves reasoning accuracy by 7.34% over state-of-the-art KG-RAG frameworks.
 
 ## Project Structure
 - `requirements.txt` Python dependencies  
