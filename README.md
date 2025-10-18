@@ -10,15 +10,7 @@
 
 # EvoRAG: Evolving KG-based RAG with Human Feedback-driven Backpropagation
 
-![overview](resource/overview.png)
-
-<p align="center">
-  <!-- <img src="./resource/overview.png" width="600" alt="architecture"/> -->
-  <!-- <img src="./EvoRAG-FD13/resource/overview.png" width="600" alt="architecture"/> -->
-  <img src="![overview](resource/overview.png)" width="600" alt="architecture"/>
-  <!-- <img src="[./resource/overview.png](https://anonymous.4open.science/r/EvoRAG-FD13/resource/overview.png)" width="600" alt="architecture"/> -->
-</p>
-<p align="center">EvoRAG system overview</p>
+![EvoRAG system overview](resource/overview.png)
 
 Knowledge Graph-based Retrieval-Augmented Generation (KG-RAG) has emerged as a promising paradigm for enhancing LLM reasoning by retrieving multihop paths from knowledge graphs. However, existing KG-RAG frameworks often underperform in
 real-world scenarios because the pre-captured knowledge dependencies are not tailored to the downstream generation task or its evolving requirements. These frameworks struggle to adapt to user intent and lack mechanisms to filter low-contribution knowledge during generation. We observe that human feedback on generated responses offers effective supervision for improving KG quality, as it directly reflects user expectations and provides insights into the correctness and usefulness of the output. However, a key challenge lies in effectively linking response-level feedback to triplet-level updates in the knowledge graph.
