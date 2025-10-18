@@ -10,6 +10,8 @@
 
 # EvoRAG: Evolving KG-based RAG with Human Feedback-driven Backpropagation
 
+![overview](resource/overview.png)
+
 <p align="center">
   <!-- <img src="./resource/overview.png" width="600" alt="architecture"/> -->
   <!-- <img src="./EvoRAG-FD13/resource/overview.png" width="600" alt="architecture"/> -->
