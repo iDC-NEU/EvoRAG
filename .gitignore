@@ -2,7 +2,7 @@
 logs/
 logs
 __pycache__/
-run.sh
+# run.sh
 dataset/rgb
 dataset/multihop
 KGModify/
