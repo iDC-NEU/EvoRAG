@@ -18,7 +18,7 @@ for ((i=START; i<END; i++)); do
     echo "Running iteration $i..."
     python -m database.insert_triples --db "$DB" --data "$DATA" --proc "$PROC" --iteration "$i"
 
-    python kg_modify.py --dataset_name "$DATA" --llm "$LLM" --graphdb nebulagraph --space_name "$DB" --option evolve_batch --llmbackend vllm --iteration "$i" > ./logs/${ALGORITHM}/output/${DATA}_evolve_batch_${LLM}_${ALGORITHM}_${i}.log 2>&1
+    python kg_modify.py --dataset_name "$DATA" --llm "$LLM" --graphdb nebulagraph --space_name "$DB" --option evolve_batch --llmbackend vllm --iteration "$i" --rate 0.1 > ./logs/${ALGORITHM}/output/${DATA}_evolve_batch_${LLM}_${ALGORITHM}_${i}.log 2>&1
 
 
 done

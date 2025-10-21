@@ -1,6 +1,6 @@
 
 import os
-# os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0, 2"
 import re
 from typing import List, overload
 from overrides import override
@@ -64,7 +64,7 @@ class Vllm(LLMBase):
         self.llm = LLM(
             model=self.path,
             # model="/home/hdd/model/Meta-Llama-3-8B-Instruct",
-            tensor_parallel_size=1,
+            tensor_parallel_size=2,
             gpu_memory_utilization=0.95,
             enable_prefix_caching=True,
             # disable_custom_all_reduce=True,

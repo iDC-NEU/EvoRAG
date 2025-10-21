@@ -44,4 +44,7 @@ __pycache__/
 test.py
 *.sh
 !run_batch.sh
+!run_noise.sh
+!run_case_pruning.sh
+!run_case_entity.sh
 
