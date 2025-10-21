@@ -34,8 +34,8 @@ __pycache__/
 !/logs/basic_batch/
 !/logs/standard_batch/
 # 但忽略它们下面所有文件
-/logs/basic_batch/**/*      
-/logs/standard_batch/**/*   
+# /logs/basic_batch/**/*      
+# /logs/standard_batch/**/*   
 # 再次取消忽略 .gitkeep
 !/logs/basic_batch/**/.gitkeep
 !/logs/standard_batch/**/.gitkeep
