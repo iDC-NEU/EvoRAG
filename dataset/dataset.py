@@ -25,6 +25,9 @@ MULTIHOP_INFERENCE_PATH = os.path.join(Path(__file__).parent, "multihop", "multi
 
 DRAGONBALL_PATH = os.path.join(Path(__file__).parent, "dragonball", "dragonball_queries.jsonl")
 DRAGONBALL_CONTEXT_PATH = os.path.join(Path(__file__).parent, "dragonball", "dragonball_docs.jsonl")
+METAPATH_HOP1_PATH = os.path.join(Path(__file__).parent, "metaqa", "hop1_qa_dev.txt")
+METAPATH_HOP2_PATH = os.path.join(Path(__file__).parent, "metaqa", "hop2_qa_dev.txt")
+METAPATH_HOP3_PATH = os.path.join(Path(__file__).parent, "metaqa", "hop3_qa_dev.txt")
 
 class Dataset:
     def __init__(self, name : str):
@@ -136,6 +139,81 @@ class Dataset:
                 # domains.append(domain_tmp)
                 # question_types.append(query_type_tmp)
             print(f"-query num--{len(self.query)}----")
+        elif self.dataset_name == "metaqa":
+            q_hop1 = []
+            a_hop1 = []
+            with open(METAPATH_HOP1_PATH, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and '\t' in line:
+                        question, answers = line.split('\t', 1)
+                        # 去除问题中的[]
+                        question = question.replace('[', '').replace(']', '')
+                        # 分割答案
+                        answer_list = [ans.strip() for ans in answers.split('|')]
+                        q_hop1.append(question)
+                        a_hop1.append(answer_list)
+            q_hop2 = []
+            a_hop2 = []
+            with open(METAPATH_HOP2_PATH, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and '\t' in line:
+                        question, answers = line.split('\t', 1)
+                        # 去除问题中的[]
+                        question = question.replace('[', '').replace(']', '')
+                        # 分割答案
+                        answer_list = [ans.strip() for ans in answers.split('|')]
+                        q_hop2.append(question)
+                        a_hop2.append(answer_list)
+            q_hop3 = []
+            a_hop3 = []
+            with open(METAPATH_HOP3_PATH, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and '\t' in line:
+                        question, answers = line.split('\t', 1)
+                        # 去除问题中的[]
+                        question = question.replace('[', '').replace(']', '')
+                        # 分割答案
+                        answer_list = [ans.strip() for ans in answers.split('|')]
+                        q_hop3.append(question)
+                        a_hop3.append(answer_list)
+            # print(q_hop1[:10])
+            # print(a_hop1[:10])
+            
+            # 根据答案个数进行排序
+            # sorted_pairs_hop1 = sorted(zip(q_hop1, a_hop1), key=lambda x: len(x[1]))
+            # # 解压为两个排序后的列表
+            # sorted_question_hop1, sorted_answer_list_hop1 = zip(*sorted_pairs_hop1)
+            # # 转换回 list
+            # sorted_q_hop1 = list(sorted_question_hop1)
+            # sorted_a_hop1 = list(sorted_answer_list_hop1)
+            
+            # sorted_pairs_hop2 = sorted(zip(q_hop2, a_hop2), key=lambda x: len(x[1]))
+            # sorted_question_hop2, sorted_answer_list_hop2 = zip(*sorted_pairs_hop2)
+            # sorted_q_hop2 = list(sorted_question_hop2)
+            # sorted_a_hop2 = list(sorted_answer_list_hop2)
+            
+            # sorted_pairs_hop3 = sorted(zip(q_hop3, a_hop3), key=lambda x: len(x[1]))
+            # sorted_question_hop3, sorted_answer_list_hop3 = zip(*sorted_pairs_hop3)
+            # sorted_q_hop3 = list(sorted_question_hop3)
+            # sorted_a_hop3 = list(sorted_answer_list_hop3)
+            
+            # self.query.extend(sorted_q_hop1[:200])
+            # self.query.extend(sorted_q_hop2[:200])
+            self.query.extend(q_hop1[:300])
+            self.query.extend(q_hop2[:300])
+            # self.query.extend(q_hop3[:100])
+            
+            # self.answer.extend(sorted_a_hop1[:200])
+            # self.answer.extend(sorted_a_hop2[:200])
+            self.answer.extend(a_hop1[:300])
+            self.answer.extend(a_hop2[:300])
+            # self.answer.extend(a_hop3[:100])
+            # assert False
+            
+
         else:
             raise ValueError("Invalid dataset name")
 
@@ -198,4 +276,4 @@ class Dataset:
                 
 
 if __name__ == "__main__":
-    Dataset("multihop")
+    Dataset("metaqa")

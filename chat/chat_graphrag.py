@@ -16,11 +16,14 @@ from llama_index.core.prompts.base import PromptTemplate
 from llama_index.core.prompts.prompt_type import PromptType
 import json
 import re
+import time
 
 from chat.chat_base import ChatBase
 from llmragenv.LLM.llm_base import LLMBase
 from database.graph.graph_database import GraphDatabase
 from llmragenv.Cons_Retri.KG_Retriever import RetrieverGraph
+
+from chat.chat_prompt import *
 
 
 
@@ -1361,56 +1364,56 @@ knowledge_graph_score_feedback_prompt_gemini = (
     "Retrieve Result:{knowlege_sentence}\n"
 )
 
-knowledge_graph_score_feedback_prompt_qwen3 = (
-  "You are an AI assistant tasked with evaluating the factual relevance and correctness of retrieved sets of inferential statements (each statement in natural language form) in relation to a given query and the model's previous response (Last Response). This evaluation occurs in the second step of a process, focusing on sets of statements used or relevant to the Last Response. Your task is to assign scores only to sets of statements that, when their information is combined and considered as a whole, are directly relevant to the query's specific factual question, ignoring irrelevant ones.\n\n"
-  "Crucially, your evaluation must be exceptionally strict regarding numerical values, dates, quantities, statistics, named entities, and other precise factual details derived from the collective information of the set. Exact, literal matches of the information conveyed by the entire set are paramount.\n\n"
-  "Pre-condition for Scoring:\n"
-  "1. Handling 'Insufficient Information':\n"
-  "Regardless of whether the Last Response was correct or incorrect, if it explicitly states that it cannot answer the query due to insufficient or irrelevant information, or requests more details (e.g., contains phrases like 'insufficient information to determine', 'need more context', 'based on the provided snippets/statements...'), do not evaluate or score any sets of statements.\n"
-  "In this specific case, your only output should be the phrase 'Insufficient information'. Do not proceed with the scoring rules below.\n\n"
-  "Evaluation Criteria based on Last Response Correctness (Apply only if the pre-condition above is NOT met):\n\n"
-  "1.  If the Last Response was Correct :\n"
-  "    You will evaluate two potential types of sets of statements in this case:\n"
-  "    * Score Supporting Correct Sets of Statements:\n"
-  "        Assign a score only to sets of statements where the combined information from all statements within the set, when taken together, provides specific and exact facts that directly justify the correct answer. The set as a whole must unambiguously and explicitly lead to or express the key facts needed to answer the question correctly. It is not necessary for every individual statement in the set to contain the complete correct answer, as long as their combination does.\n"
-  "        Score from 1 to 3:\n"
-  "        - 3 = The set is highly relevant, its collective information is precise and essential; the combined statements provide the exact fact or strong logical support for the answer.\n"
-  "        - 2 = The set is relevant and its collective information is mostly correct, but the combined information may be slightly indirect, or some statements within the set might be redundant if others already establish the point.\n"
-  "        - 1 = The set provides weak but still factual collective support for the correct answer.\n\n"
-  "    * Score Contradictory or Misleading Sets of Statements:\n"
-  "        Assign a score only to sets of statements where the combined information, when taken together, contains factual inaccuracies or strongly suggests incorrect conclusions that would contradict the actual correct answer. It is not necessary for every individual statement in the set to be contradictory, as long as the collective meaning of the set is contradictory.\n"
-  "        Score from 1 to 3 depending on how directly and convincingly the set as a whole would mislead or contradict the correct answer.\n\n"
-  "2.  If the Last Response was Incorrect :\n"
-  "    You will evaluate only one type of set of statements in this case:\n"
-  "    * Score Sets of Statements Supporting the Error (Exact Match Rule for Collective Information):\n"
-  "        Assign a score only to sets of statements whose collective factual content, when all statements are considered together, exactly and literally matches the specific incorrect information present in the Last Response. It is not necessary for every individual statement in the set to contain the full error, as long as their combination directly supports the specific error.\n"
-  "        Score from 1 to 3, with 3 indicating the set's combined information provides direct, unambiguous, and exact factual support for the specific error. Do not score sets whose collective information provides only vague or approximate matches to the error. Crucially, do not score sets of statements that collectively provide the correct answer in this scenario.\n\n"
-  "General Rules for Relevance and Scoring:\n\n"
-  "* Direct Relevance of the Set Only: Only evaluate sets of statements that, as a collective unit, directly address or support the answering of the core factual question posed by the query. Ignore sets providing only general or contextual statements not directly contributing to this.\n"
-  "* Precision is Paramount (for Collective Information):\n"
-  "    * Dates, quantities, named entities, and identifiers derived from the collective information of the set must match exactly where precision is required by the query or for evaluating correctness/error.\n"
-  "    * Sets supporting a correct answer must, through their combined information, affirm the exact constraints required by the query perfectly.\n"
-  "    * Sets supporting an incorrect answer must, through their combined information, perfectly mirror the specific erroneous value and context from the Last Response.\n"
-  "* Constraint Mismatches: Sets of statements where the overall information presented by the set fails the query's specific constraints (e.g., wrong year, different metric for the collective data) are irrelevant for scoring as 'Correct'. They are also irrelevant for scoring as 'Error' unless the set as a whole perfectly matches the specific error made in the Last Response regarding that mismatched constraint/value.\n"
-  "* No New Information: Do not score sets of statements that, when taken together, merely repeat parts of the query without adding new, collectively useful factual information.\n"
-  "* Context of Last Response: Do not score a set as 'Correct' (supporting the correct answer) if the Last Response was incorrect. Similarly, the 'Contradictory' category applies primarily when the Last Response was correct.\n\n"
-  "Output Format:\n\n"
-  "* For scored sets supporting a correct answer: Correct: <set_index>:<score> <set_index>:<score> ...\n"
-  "* For scored sets supporting an error or being contradictory/misleading: Error: <set_index>:<score> <set_index>:<score> ...\n"
-  "* If no sets of statements are scored as either Correct or Error after evaluation: return No feedback\n"
-  "* If the 'Insufficient Information' pre-condition is met: return Insufficient information\n\n"
-  "Example Output Structures:\n"
-  "Correct: 2:3 5:2\n"
-  "Error: 3:3 7:1\n"
-  "Correct: 1:3\n"
-  "Error: 4:3\n"
-  "No feedback\n"
-  "Insufficient information\n\n"
-  "Do not provide explanations—only output structured results as specified above.\n\n"
-  "Query: {question}\n"
-  "Last Answer ({flag_TF}): {last_response}\n"
-  "Retrieved Statement Sets: {knowledge_statement_sets}\n"
-)
+# knowledge_graph_score_feedback_prompt_qwen3 = (
+#   "You are an AI assistant tasked with evaluating the factual relevance and correctness of retrieved sets of inferential statements (each statement in natural language form) in relation to a given query and the model's previous response (Last Response). This evaluation occurs in the second step of a process, focusing on sets of statements used or relevant to the Last Response. Your task is to assign scores only to sets of statements that, when their information is combined and considered as a whole, are directly relevant to the query's specific factual question, ignoring irrelevant ones.\n\n"
+#   "Crucially, your evaluation must be exceptionally strict regarding numerical values, dates, quantities, statistics, named entities, and other precise factual details derived from the collective information of the set. Exact, literal matches of the information conveyed by the entire set are paramount.\n\n"
+#   "Pre-condition for Scoring:\n"
+#   "1. Handling 'Insufficient Information':\n"
+#   "Regardless of whether the Last Response was correct or incorrect, if it explicitly states that it cannot answer the query due to insufficient or irrelevant information, or requests more details (e.g., contains phrases like 'insufficient information to determine', 'need more context', 'based on the provided snippets/statements...'), do not evaluate or score any sets of statements.\n"
+#   "In this specific case, your only output should be the phrase 'Insufficient information'. Do not proceed with the scoring rules below.\n\n"
+#   "Evaluation Criteria based on Last Response Correctness (Apply only if the pre-condition above is NOT met):\n\n"
+#   "1.  If the Last Response was Correct :\n"
+#   "    You will evaluate two potential types of sets of statements in this case:\n"
+#   "    * Score Supporting Correct Sets of Statements:\n"
+#   "        Assign a score only to sets of statements where the combined information from all statements within the set, when taken together, provides specific and exact facts that directly justify the correct answer. The set as a whole must unambiguously and explicitly lead to or express the key facts needed to answer the question correctly. It is not necessary for every individual statement in the set to contain the complete correct answer, as long as their combination does.\n"
+#   "        Score from 1 to 3:\n"
+#   "        - 3 = The set is highly relevant, its collective information is precise and essential; the combined statements provide the exact fact or strong logical support for the answer.\n"
+#   "        - 2 = The set is relevant and its collective information is mostly correct, but the combined information may be slightly indirect, or some statements within the set might be redundant if others already establish the point.\n"
+#   "        - 1 = The set provides weak but still factual collective support for the correct answer.\n\n"
+#   "    * Score Contradictory or Misleading Sets of Statements:\n"
+#   "        Assign a score only to sets of statements where the combined information, when taken together, contains factual inaccuracies or strongly suggests incorrect conclusions that would contradict the actual correct answer. It is not necessary for every individual statement in the set to be contradictory, as long as the collective meaning of the set is contradictory.\n"
+#   "        Score from 1 to 3 depending on how directly and convincingly the set as a whole would mislead or contradict the correct answer.\n\n"
+#   "2.  If the Last Response was Incorrect :\n"
+#   "    You will evaluate only one type of set of statements in this case:\n"
+#   "    * Score Sets of Statements Supporting the Error (Exact Match Rule for Collective Information):\n"
+#   "        Assign a score only to sets of statements whose collective factual content, when all statements are considered together, exactly and literally matches the specific incorrect information present in the Last Response. It is not necessary for every individual statement in the set to contain the full error, as long as their combination directly supports the specific error.\n"
+#   "        Score from 1 to 3, with 3 indicating the set's combined information provides direct, unambiguous, and exact factual support for the specific error. Do not score sets whose collective information provides only vague or approximate matches to the error. Crucially, do not score sets of statements that collectively provide the correct answer in this scenario.\n\n"
+#   "General Rules for Relevance and Scoring:\n\n"
+#   "* Direct Relevance of the Set Only: Only evaluate sets of statements that, as a collective unit, directly address or support the answering of the core factual question posed by the query. Ignore sets providing only general or contextual statements not directly contributing to this.\n"
+#   "* Precision is Paramount (for Collective Information):\n"
+#   "    * Dates, quantities, named entities, and identifiers derived from the collective information of the set must match exactly where precision is required by the query or for evaluating correctness/error.\n"
+#   "    * Sets supporting a correct answer must, through their combined information, affirm the exact constraints required by the query perfectly.\n"
+#   "    * Sets supporting an incorrect answer must, through their combined information, perfectly mirror the specific erroneous value and context from the Last Response.\n"
+#   "* Constraint Mismatches: Sets of statements where the overall information presented by the set fails the query's specific constraints (e.g., wrong year, different metric for the collective data) are irrelevant for scoring as 'Correct'. They are also irrelevant for scoring as 'Error' unless the set as a whole perfectly matches the specific error made in the Last Response regarding that mismatched constraint/value.\n"
+#   "* No New Information: Do not score sets of statements that, when taken together, merely repeat parts of the query without adding new, collectively useful factual information.\n"
+#   "* Context of Last Response: Do not score a set as 'Correct' (supporting the correct answer) if the Last Response was incorrect. Similarly, the 'Contradictory' category applies primarily when the Last Response was correct.\n\n"
+#   "Output Format:\n\n"
+#   "* For scored sets supporting a correct answer: Correct: <set_index>:<score> <set_index>:<score> ...\n"
+#   "* For scored sets supporting an error or being contradictory/misleading: Error: <set_index>:<score> <set_index>:<score> ...\n"
+#   "* If no sets of statements are scored as either Correct or Error after evaluation: return No feedback\n"
+#   "* If the 'Insufficient Information' pre-condition is met: return Insufficient information\n\n"
+#   "Example Output Structures:\n"
+#   "Correct: 2:3 5:2\n"
+#   "Error: 3:3 7:1\n"
+#   "Correct: 1:3\n"
+#   "Error: 4:3\n"
+#   "No feedback\n"
+#   "Insufficient information\n\n"
+#   "Do not provide explanations—only output structured results as specified above.\n\n"
+#   "Query: {question}\n"
+#   "Last Answer ({flag_TF}): {last_response}\n"
+#   "Retrieved Statement Sets: {knowledge_statement_sets}\n"
+# )
 
 knowledge_graph_score_feedback_prompt_qwen3_huggingface = (
   "<|im_start|>system\n"
@@ -1724,10 +1727,10 @@ knowledge_graph_error_statistics_prompt_v3 = (
 
 class ChatGraphRAG(ChatBase):
 
-    def __init__(self, llm: LLMBase, graph_db : GraphDatabase):
+    def __init__(self, llm: LLMBase, graph_db : GraphDatabase, args = None):
         super().__init__(llm)
         self.graph_database = graph_db
-        self.retriver_graph = RetrieverGraph(llm,graph_db)
+        self.retriver_graph = RetrieverGraph(llm,graph_db, args)
 
     
     def retrieve_triplets(self, message, space_name):
@@ -1797,43 +1800,124 @@ class ChatGraphRAG(ChatBase):
             
         # ic(answers)
         return answers
+
     
-
-    def chat_without_stream_with_triplets(self, message: str, triplets = []):
-        # ic(self.triplets)
-        self.triplets = triplets
-        context = ""
-        for sentence in triplets:
-            # context = context + '\n' + sentence
-            context = context + sentence + '\n'
-
-        prompt = llama_QA_graph_prompt.format(query = message, context = context)
-        # ic(prompt)
-
-        answers = self._llm.chat_with_ai(prompt)
-
-        # ic(answers)
-        return answers
-    
-    def chat_without_stream_with_triplets_llama_instruct(self, message: str, triplets = None):
+    # +++
+    def chat_without_stream_with_triplets(self, message: str, triplets = None):
         # ic(self.triplets)
         # self.triplets = triplets
         if isinstance(triplets, List):
             context = ""
             for sentence in triplets:
-                # context = context + sentence
-                context = context + sentence + '\n'
+                context += f'{sentence}\n'
         else:
             context = triplets
 
-        prompt = chat_with_ollama_8b_for_response.format(knowledge_sequences = context, question = message)
+        prompt_system = chat_with_graphrag_for_response_system.format(knowledge_sequences = context)
+        prompt_user = chat_with_graphrag_for_response_user.format(question = message)
+
         # ic(prompt)
         # print(f"chat_without_stream_with_triplets_llama_instruct:\n{prompt}")
 
-        answers, num_input_tokens = self._llm.chat_with_ai(prompt)
+        # answers, num_input_tokens, chat_time = self._llm.chat_with_ai_with_system(prompt_system=prompt_system,
+        #                                                               prompt_user=prompt_user,
+        #                                                               history=None)
+        start_time = time.perf_counter()
+        answers = self._llm.chat_with_ai_with_system(prompt_system=prompt_system,
+                                                                      prompt_user=prompt_user,
+                                                                      history=None)
+        num_input_tokens = 6
+        end_time = time.perf_counter()
+        chat_time = end_time - start_time
 
         # ic(answers)
-        return answers, num_input_tokens, prompt
+        return answers, num_input_tokens, chat_time
+
+    # +++
+    def chat_without_stream_with_triplets_shared_prefix(self, message: str, triplets = None):
+        # ic(self.triplets)
+        # self.triplets = triplets
+        if isinstance(triplets, List):
+            context = ""
+            for idx, sentence in enumerate(triplets, start=0):
+                context += f"Path {idx}:\t{sentence}\n"
+            # for sentence in triplets:
+            #     context += f'{sentence}\n'
+        else:
+            context = triplets
+
+        prompt_system = shared_prefix.format(knowledge_sequences = context)
+        prompt_user = chat_with_graphrag_for_response_user_shared_prefix.format(question = message)
+
+        # ic(prompt)
+        # print(f"chat_without_stream_with_triplets_llama_instruct:\n{prompt}")
+
+
+        # if self._llm.llmbackend == 'vllm':
+        #     answers, prompt_len, generate_len, end2end_time, generate_time, prefill_time, decode_time, wait_scheduled_time = self._llm.chat_with_ai_with_system(prompt_system=prompt_system, prompt_user=prompt_user, history=None)
+        # else:
+        #     start_end2end_time = time.perf_counter()
+        #     answers = self._llm.chat_with_ai_with_system(prompt_system=prompt_system,
+        #                                                                 prompt_user=prompt_user,
+        #                                                                 history=None)
+        #     end_end2end_time = time.perf_counter()
+        #     prompt_len, generate_len, end2end_time, generate_time, prefill_time, decode_time, wait_scheduled_time = 0, 0, end_end2end_time - start_end2end_time, 0, 0, 0, 0
+
+        answers, prompt_len, generate_len, end2end_time, generate_time, prefill_time, decode_time, wait_scheduled_time = self._llm.chat_with_ai_with_system(prompt_system=prompt_system, prompt_user=prompt_user, history=None)
+        
+        # ic(answers)
+        return answers, prompt_len, generate_len, end2end_time, generate_time, prefill_time, decode_time, wait_scheduled_time
+    
+    # +++
+    def chat_without_stream_with_triplets_shared_prefix_batch(self, message: List[str], triplets = List[str]):
+        # ic(self.triplets)
+        # self.triplets = triplets
+        if isinstance(triplets, List):
+            context = ""
+            for idx, sentence in enumerate(triplets, start=0):
+                context += f"Path {idx}:\t{sentence}\n"
+            # for sentence in triplets:
+            #     context += f'{sentence}\n'
+        else:
+            context = triplets
+
+        prompt_system = []
+        prompt_user = []
+        for message_item, triplets_item in zip(message, triplets):
+            context = ""
+            for idx, sentence in enumerate(triplets_item, start=0):
+                context += f"Path {idx}:\t{sentence}\n"
+            prompt_system.append(shared_prefix.format(knowledge_sequences = context))
+            prompt_user.append(chat_with_graphrag_for_response_user_shared_prefix.format(question = message_item))
+
+        answers, prompt_len, end2end_time = self._llm.chat_with_ai_with_system(prompt_system=prompt_system, prompt_user=prompt_user, history=None)
+        
+        # ic(answers)
+        return answers, prompt_len, end2end_time
+    
+    # +++
+    def chat_without_stream_short_cut(self, triplets):
+        # ic(self.triplets)
+
+        prompt_user = short_cut(original_path = triplets)
+
+        output = None
+        retry = 1
+        while retry <= 3:
+            try:
+                # output = self._llm.chat_with_ai(prompt)
+                output = self._llm.chat_with_ai_with_system("", prompt_user)
+                # output = self._llm.chat_with_ai_mulRounds(history = history)
+                # print(f"feedback output {retry}\noutput: {output}")
+                res_parsed = json.loads(output)
+                source_node = res_parsed["source_node"]
+                inferred_relationship = res_parsed["inferred_relationship"]["label"]
+                target_node = res_parsed["target_node"]
+                return res_parsed
+            except Exception as e:
+                print(f"short_cut output parse error: {e}\nllm response: {output}")
+                retry += 1       
+        return {}
 
     def chat_without_stream_with_triplets_llama_api(self, message: str, triplets = None):
         import time
@@ -3756,7 +3840,8 @@ class ChatGraphRAG(ChatBase):
 
     
     # 使用ollama，无多轮对话，与chat_without_stream_for_socre_feedback_latest_v4一模一样
-    def chat_without_stream_for_socre_feedback_latest_v4_llama(self, message: str, response: str, filtered_retrieve_result= [], flag_TF = 0, llm_name = ''):
+    # +++
+    def chat_without_stream_for_socre_feedback_basic(self, message: str, response: str, filtered_retrieve_result= [], flag_TF = 0):
         context = ""
         for idx, sentence in enumerate(filtered_retrieve_result, start=0):
             context = context + f"{idx}. {sentence}\n"
@@ -3764,19 +3849,15 @@ class ChatGraphRAG(ChatBase):
             flag_str = "Correct"
         else:
             flag_str = "Incorrect"
-        # prompt = knowledge_graph_score_feedback_prompt_4_1_latest.format(question = message, flag_TF = flag_str, last_response = response, knowlege_sentence = retrieve_str)
-        # prompt = knowledge_graph_score_feedback_prompt_gemini.format(question = message, flag_TF = flag_str, last_response = response, knowlege_sentence = retrieve_str)
-        if llm_name == 'Qwen3-32B' or llm_name == 'Qwen2.5-32B-Instruct':
-            prompt = knowledge_graph_score_feedback_prompt_qwen3_huggingface.format(question = message, flag_TF = flag_str, last_response = response, knowledge_statement_sets = context)
-        else:
-            prompt = knowledge_graph_score_feedback_prompt_qwen3.format(question = message, flag_TF = flag_str, last_response = response, knowledge_statement_sets = context)
-
+        prompt_system = score_feedback_prompt_baisc_system
+        prompt_user = score_feedback_prompt_baisc_user.format(question = message, flag_TF = flag_str, last_response = response, knowledge_statement_sets = context)
         output = None
         retry = 1
         while retry <= 3:
             try:
-                output = self._llm.chat_with_ai(prompt)
-                # print(f"feedback output {retry}: {output}")
+                # output = self._llm.chat_with_ai(prompt)
+                output = self._llm.chat_with_ai_with_system(prompt_system, prompt_user)
+                # print(f"feedback output {retry}:\n prompt:\n{prompt_user}\n output:\n {output}")
                 line_list =  output.strip().split('\n')
                 correct_numbers = {}
                 error_numbers = {}
@@ -3826,6 +3907,205 @@ class ChatGraphRAG(ChatBase):
                 retry += 1       
         
         return '', {}, {}
+    
+    # +++
+    def chat_without_stream_for_socre_feedback_standard(self, message: str, response: str, filtered_retrieve_result= [], flag_TF = 0):
+        context = ""
+        for idx, sentence in enumerate(filtered_retrieve_result, start=0):
+            context += f"Path {idx}:\t{sentence}\n"
+        if flag_TF:
+            flag_str = "Correct answer"
+        else:
+            flag_str = "Incorrect answer"
+        prompt_system = score_feedback_prompt_standard_system
+        prompt_user = score_feedback_prompt_standard_user.format(question = message, last_response = response, knowledge_paths = context) # flag_TF = flag_str
+        # history = [
+        #     {
+        #         "role": "system",
+        #         "content": score_feedback_prompt_standard_system_mulRounds,
+        #     },
+        #     {
+        #         "role": "user",
+        #         "content": score_feedback_prompt_standard_user1_mulRounds.format(question = message)
+        #     },
+        #     {
+        #         "role": "assistant",
+        #         "content": score_feedback_prompt_standard_assistant_mulRounds.format(last_response = response, knowledge_paths = context)
+        #     },
+        #     {
+        #         "role": "user",
+        #         "content": score_feedback_prompt_standard_user2_mulRounds,
+        #     }
+        # ]
+        # print(f"-----prompt----")
+        # print(f"-----system-----\n{history[0]['content']}")
+        # print(f"-----user1-----\n{history[1]['content']}")
+        # print(f"-----assistant-----\n{history[2]['content']}")
+        # print(f"-----user2-----\n{history[3]['content']}")
+
+        print(f"-----prompt----\n{prompt_system}\n{prompt_user}")
+
+        output = None
+        retry = 1
+        while retry <= 3:
+            try:
+                # output = self._llm.chat_with_ai(prompt)
+                output = self._llm.chat_with_ai_with_system(prompt_system, prompt_user)
+                # output = self._llm.chat_with_ai_mulRounds(history = history)
+                # print(f"feedback output {retry}\noutput: {output}")
+                res_parsed = json.loads(output)
+                reasoning_path = res_parsed["Reasoning_path"]
+                insufficient = res_parsed["Insufficient_information"]
+                path_score = res_parsed["Path_score"]
+                return res_parsed
+            except Exception as e:
+                print(f"feedback_standard output parse error: {e}\nllm response: {output}")
+                retry += 1       
+        return {}
+    
+    # +++
+    def chat_without_stream_for_socre_feedback_standard_shared_prefix(self, message: str, response: str, filtered_retrieve_result= [], flag_TF = 0):
+        context = ""
+        for idx, sentence in enumerate(filtered_retrieve_result, start=0):
+            context += f"Path {idx}:\t{sentence}\n"
+        if flag_TF:
+            flag_str = "Correct answer"
+        else:
+            flag_str = "Incorrect answer"
+        prompt_system = shared_prefix.format(knowledge_sequences = context)
+        prompt_user = score_feedback_prompt_standard_user_shared_prefix.format(question = message, last_response = response) # flag_TF = flag_str
+        
+        # prompt_system = score_feedback_prompt_standard_system_test.format(knowledge_sequences = context)
+        # prompt_user = score_feedback_prompt_standard_user_test.format(question = message, last_response = response)
+        
+        # prompt_system = score_feedback_prompt_standard_system_test_1.format(knowledge_paths = context)
+        # prompt_user = score_feedback_prompt_standard_user_test_1.format(question = message, last_response = response)
+        
+        
+        print(f"-----prompt----\n{prompt_system}\n{prompt_user}")
+
+        output = None
+        retry = 1
+        while retry <= 3:
+            try:
+                # output = self._llm.chat_with_ai(prompt)
+                # output = self._llm.chat_with_ai_with_system(prompt_system, prompt_user)
+                output, prompt_len, generate_len, end2end_time, generate_time, prefill_time, decode_time, wait_scheduled_time = self._llm.chat_with_ai_with_system(prompt_system, prompt_user)
+                # output = self._llm.chat_with_ai_mulRounds(history = history)
+                res_parsed = json.loads(output)
+                print(f"feedback output {retry}\noutput: {json.dumps(res_parsed, indent=2)}")
+                # reasoning_path = res_parsed["Reasoning_path"]
+                insufficient = res_parsed["Insufficient_information"]
+                path_score = res_parsed["Path_score"]
+                return res_parsed, prompt_len, generate_len, end2end_time, generate_time, prefill_time, decode_time, wait_scheduled_time
+            except Exception as e:
+                print(f"feedback_standard_shared_prefix output parse error: {e}\nllm response: {output}")
+                retry += 1       
+        return {}
+
+    # +++
+    def chat_without_stream_for_socre_feedback_standard_shared_prefix_batch(self, query: List[str], response: List[str], filtered_retrieve_result_batch: List[str]):
+        context_batch = []
+        for filtered_retrieve_result in filtered_retrieve_result_batch:
+            context = ""
+            for idx, sentence in enumerate(filtered_retrieve_result, start=0):
+                context += f"Path {idx}:\t{sentence}\n"
+            context_batch.append(context)
+        prompt_system_batch = []
+        prompt_user_batch = []
+        for i in range(len(query)):
+            prompt_system = shared_prefix.format(knowledge_sequences = context_batch[i])
+            prompt_user = score_feedback_prompt_standard_user_shared_prefix.format(question = query[i], last_response = response[i]) # flag_TF = flag_str
+            prompt_system_batch.append(prompt_system)
+            prompt_user_batch.append(prompt_user)
+            # print(f"-----prompt----\n{prompt_system}\n{prompt_user}")
+
+        output = []
+        prompt_len = []
+        response_batch = []
+        generate_time = 0
+        retry = 1
+        while retry <= 3:
+            try:
+                # output = self._llm.chat_with_ai(prompt)
+                response_batch, prompt_len, generate_time = self._llm.chat_with_ai_with_system(prompt_system_batch, prompt_user_batch)
+                # output, prompt_len, generate_len, end2end_time, generate_time, prefill_time, decode_time, wait_scheduled_time = self._llm.chat_with_ai_with_system(prompt_system, prompt_user)
+                for i in range(len(response_batch)):
+                    try:
+                        res_parsed = json.loads(response_batch[i])
+                        insufficient = res_parsed.get("Insufficient_information")
+                        path_score = res_parsed.get("Path_score")
+
+                        # 如果字段缺失，视为解析失败
+                        if insufficient is None or path_score is None:
+                            raise ValueError("Missing required fields: Insufficient_information or Path_score")
+
+                        # print(f"feedback output {retry}\noutput: {json.dumps(res_parsed, indent=2)}")
+                    except Exception as e:
+                        print(f"Parse error: {e} | Response: {response_batch[i]}")
+                        res_parsed = {
+                            "Insufficient_information": True,
+                            "Path_score": {},
+                        }
+                    output.append(res_parsed)
+
+                return output, prompt_len, generate_time
+            except Exception as e:
+                print(f"feedback_standard_shared_prefix_batch output chat error: {e}\nllm response: {response_batch}")
+                retry += 1       
+        return [], [], 0
+
+    # +++
+    def chat_without_stream_for_socre_feedback_basic_shared_prefix_batch(self, query: List[str], response: List[str], triplet_unique_batch: List[str]):
+        context_batch = []
+        for triplet_unique in triplet_unique_batch:
+            context = ""
+            for idx, (h, r, t) in enumerate(triplet_unique, start=0):
+                context += f"Path {idx}:\t{h} {r.replace('_',' ')} {t}\n"
+            context_batch.append(context)
+        prompt_system_batch = []
+        prompt_user_batch = []
+        for i in range(len(query)):
+            prompt_system = shared_prefix.format(knowledge_sequences = context_batch[i])
+            prompt_user = score_feedback_prompt_standard_user_shared_prefix.format(question = query[i], last_response = response[i]) # flag_TF = flag_str
+            prompt_system_batch.append(prompt_system)
+            prompt_user_batch.append(prompt_user)
+            # print(f"-----prompt----\n{prompt_system}\n{prompt_user}")
+
+        output = []
+        prompt_len = []
+        response_batch = []
+        generate_time = 0
+        retry = 1
+        while retry <= 3:
+            try:
+                # output = self._llm.chat_with_ai(prompt)
+                response_batch, prompt_len, generate_time = self._llm.chat_with_ai_with_system(prompt_system_batch, prompt_user_batch)
+                # output, prompt_len, generate_len, end2end_time, generate_time, prefill_time, decode_time, wait_scheduled_time = self._llm.chat_with_ai_with_system(prompt_system, prompt_user)
+                for i in range(len(response_batch)):
+                    try:
+                        res_parsed = json.loads(response_batch[i])
+                        insufficient = res_parsed.get("Insufficient_information")
+                        path_score = res_parsed.get("Path_score")
+
+                        # 如果字段缺失，视为解析失败
+                        if insufficient is None or path_score is None:
+                            raise ValueError("Missing required fields: Insufficient_information or Path_score")
+
+                        # print(f"feedback output {retry}\noutput: {json.dumps(res_parsed, indent=2)}")
+                    except Exception as e:
+                        print(f"Parse error: {e} | Response: {response_batch[i]}")
+                        res_parsed = {
+                            "Insufficient_information": True,
+                            "Path_score": {},
+                        }
+                    output.append(res_parsed)
+
+                return output, prompt_len, generate_time
+            except Exception as e:
+                print(f"feedback_standard_shared_prefix_batch output chat error: {e}\nllm response: {response_batch}")
+                retry += 1       
+        return [], [], 0
         
     def chat_without_stream_for_socre_feedback_multi_round_dialogue(self, message: str, history : List[Dict[str, str]], response : str, retrieve_result = [], flag_TF = True):
         # retrieve_str = ""
@@ -4237,19 +4517,14 @@ class ChatGraphRAG(ChatBase):
             idy += len(group)
         return res_list_2d
     
-    def chat_without_stream_for_redundant_relationship_item_llama(self, redundant_relationship_2d = [], llm_name = 'llama3.3'):
+    # +++
+    def chat_without_stream_for_redundant_relationship_strict_item(self, redundant_relationship_2d = []):
         redundant_relationship_str = ""
         for idx, triple in enumerate(redundant_relationship_2d, start=0):
             redundant_relationship_str = redundant_relationship_str + str(idx) + ". " + triple[0] +' '+ triple[1].replace("_"," ") +' '+ triple[2] + "\n"
-        # prompt = knowledge_graph_redundant_relationship_prompt_v3.format(redundant_relationship = redundant_relationship_str)
-        # prompt = knowledge_graph_redundant_relationship_prompt_qwen_instruct_v2.format(redundant_relationship = redundant_relationship_str)
-        # prompt = knowledge_graph_redundant_relationship_prompt_qwen_instruct_v3.format(redundant_relationship = redundant_relationship_str)
-        if llm_name == 'Qwen3-32B' or llm_name == 'Qwen2.5-32B-Instruct':
-            prompt = knowledge_graph_redundant_relationship_prompt_qwen_instruct_v3.format(redundant_relationship = redundant_relationship_str)
-        else:
-            prompt = knowledge_graph_redundant_relationship_prompt_qwen_instruct_v3_llama.format(redundant_relationship = redundant_relationship_str)
-        # prompt = knowledge_graph_redundant_relationship_prompt_qwen_instruct_v3_llama_huggingface.format(redundant_relationship = redundant_relationship_str)
 
+        prompt_system = redundant_relationship_prompt_basic_system
+        prompt_user = redundant_relationship_prompt_basic_user.format(redundant_relationship = redundant_relationship_str)
 
         # print(f"redundant_relationship_prompt\n{prompt}")
                 
@@ -4257,11 +4532,8 @@ class ChatGraphRAG(ChatBase):
         retry = 1
         while retry <= 3:
             try:
-                output = self._llm.chat_with_ai(prompt)
+                output = self._llm.chat_with_ai_with_system(prompt_system = prompt_system, prompt_user = prompt_user)
                 # print(f"output_for_redundant_relationship {retry}: \n{output}")
-
-                # if output == "No results matching your criteria.":
-                #     return []
                 numeric_ids = [
                     int(id_str.strip())
                     for id_str in output.strip().split(",") 
@@ -4274,12 +4546,13 @@ class ChatGraphRAG(ChatBase):
                 print(f"{retry} redundant relationship output parse error: {e}\nllm response: {output}")
                 retry += 1
         return []
-
-    def chat_without_stream_for_redundant_relationship_v3_llama(self, redundant_relationship_3d = [], llm_name = 'llama3.3'):
+    
+    # +++
+    def chat_without_stream_for_redundant_relationship_strict(self, redundant_relationship_3d = []):
         idy = 0
         res_list_2d = []
         for idx, group in enumerate(redundant_relationship_3d, start=0):
-            res = self.chat_without_stream_for_redundant_relationship_item_llama(redundant_relationship_2d = group, llm_name = llm_name)
+            res = self.chat_without_stream_for_redundant_relationship_strict_item(redundant_relationship_2d = group)
             if res:
                 res = [
                     id + idy

@@ -19,6 +19,7 @@ from llmragenv.LLM.qwen.client import QwenClient
 from llmragenv.LLM.zhipu.client import ZhipuClient
 from llmragenv.LLM.openai.client import OpenAIClient
 from llmragenv.LLM.api.client import APIClient
+from llmragenv.LLM.vllm.client import Vllm
 from llmragenv.LLM.huggingface.client import HuggingfaceClient
 from utils.singleton import Singleton
 from utils.url_paser import is_valid_url
@@ -34,8 +35,9 @@ LLMProvider = {
     "deepseek" : [],
     "doubao" : [],
     "gpt" : ["gpt-4o-mini"],
-    "llama" : ["qwen:0.5b", "llama2:7b", "llama2:13b", "llama2:70b","llama3:70b","llama3.1:70b","qwen:7b","qwen:14b","qwen:72b", "llama3.3", "deepseek-r1:70b", "llama3:8b-instruct-fp16", "meta-llama-3-8b", "llama_3_8b", "qwen2.5:72b", "qwen2.5:32b-instruct-fp16"],
-    "huggingface" : ["Meta-Llama-3-8B-Instruct", "Qwen2.5-32B-Instruct", "Qwen2.5-72B-Instruct-GPTQ-Int8", "Qwen3-32B"],
+    "llama" : ["qwen:0.5b", "llama2:7b", "llama2:13b", "llama2:70b","llama3:70b","llama3.1:70b","qwen:7b","qwen:14b","qwen:72b", "llama3.3", "deepseek-r1:70b", "llama3:8b-instruct-fp16", "meta-llama-3-8b", "llama_3_8b", "qwen2.5:72b", "qwen2.5:32b-instruct-fp16", 'qwen3:32b'],
+    "huggingface" : ["Meta-Llama-3-8B-Instruct", "Qwen2.5-32B-Instruct", "Qwen2.5-72B-Instruct-GPTQ-Int8", "Qwen3-32B", "Meta-Llama-3.1-8B-Instruct"],
+    "vllm" : ["Meta-Llama-3-8B-Instruct", "Qwen2.5-32B-Instruct", "Qwen2.5-72B-Instruct-GPTQ-Int8", "Qwen3-32B", "Llama-3.1-8B-Instruct"],
     "api" : ['qwen3_32b', 'llama_3_8b'],
 }
 
@@ -100,29 +102,31 @@ class ClientFactory():
             else:
                 raise ClientAPIUnsupportedError("No client API adapted")
         if self.llmbackend == "api":
-            if self.model_name in LLMProvider["api"]:
-                return APIClient(self.model_name, "", "")
-            else:
-                raise ClientAPIUnsupportedError("No client API adapted")
+            # if self.model_name in LLMProvider["api"]:
+            #     return APIClient(self.model_name, "", "")
+            # else:
+            #     raise ClientAPIUnsupportedError("No client API adapted")
+            return APIClient(self.model_name, "", "")
         elif self.llmbackend == "llama_index":
-            if self.model_name in LLMProvider["llama"]:
-                url = Config.get_instance().get_with_nested_params("llm", "llama", "url")
-                key = Config.get_instance().get_with_nested_params("llm", "llama", "key")
-                return OllamaClient(self.model_name, url, key)
+            # if self.model_name in LLMProvider["llama"]:
+            #     url = Config.get_instance().get_with_nested_params("llm", "llama", "url")
+            #     key = Config.get_instance().get_with_nested_params("llm", "llama", "key")
+            #     return OllamaClient(self.model_name, url, key)
+            return OllamaClient(self.model_name, "http://localhost:11434/v1", "")
             
         elif self.llmbackend == "huggingface":
-            if self.model_name in LLMProvider["huggingface"]:
-                # print("hhhhhhhhhhhhhhhhhhhhhhhhhhhhh")
-                print(f"model name {self.model_name}")
-                # url = Config.get_instance().get_with_nested_params("llm", "llama", "url")
-                # key = Config.get_instance().get_with_nested_params("llm", "llama", "key")
-                url = ""
-                key = ""
+            # if self.model_name in LLMProvider["huggingface"]:
+            #     print(f"model name {self.model_name}")
+            #     url = Config.get_instance().get_with_nested_params("llm", "llama", "url")
+            #     key = Config.get_instance().get_with_nested_params("llm", "llama", "key")
+            #     return HuggingfaceClient(self.model_name, url, key)
+            return HuggingfaceClient(self.model_name, "", "")
 
-                model = HuggingfaceClient(self.model_name, url, key)
-                print(model)
-                # print("ppppppppppppppppppppppppppppppppppppppp")
-                return model
+        elif self.llmbackend == "vllm":
+            # if self.model_name in LLMProvider["vllm"]:
+            #     print(f"model name {self.model_name}")
+            #     return Vllm(self.model_name, "", "")
+            return Vllm(self.model_name, "", "")
             
         else:
             raise ClientError(f"No llm_backend {self.llmbackend}")
