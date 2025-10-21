@@ -10,7 +10,11 @@
 
 # EvoRAG: Evolving KG-based RAG with Human Feedback-driven Backpropagation
 
-![EvoRAG system overview](resource/overview.png)
+<p align="center">
+  <img src="resource/overview.png" alt="EvoRAG system overview">
+  <br>
+  <b>EvoRAG system overview</b>
+</p>
 
 Knowledge Graph-based Retrieval-Augmented Generation (KG-RAG) has emerged as a promising paradigm for enhancing LLM reasoning by retrieving multihop paths from knowledge graphs. However, existing KG-RAG frameworks often underperform in
 real-world scenarios because the pre-captured knowledge dependencies are not tailored to the downstream generation task or its evolving requirements. These frameworks struggle to adapt to user intent and lack mechanisms to filter low-contribution knowledge during generation. We observe that human feedback on generated responses offers effective supervision for improving KG quality, as it directly reflects user expectations and provides insights into the correctness and usefulness of the output. However, a key challenge lies in effectively linking response-level feedback to triplet-level updates in the knowledge graph.
@@ -114,8 +118,6 @@ bash run.sh
   <b>EvoRAG Workflow Diagram</b>
 </p>
 
-![EvoRAG Workflow Diagram](resource/workflow.png)
-
 The EvoRAG workflow, illustrated above, iteratively refines the knowledge graph by incorporating human feedback at each question-answering cycle, thereby continuously boosting the overall performance of the RAG system.
 
 # Notion
@@ -125,7 +127,13 @@ The EvoRAG workflow, illustrated above, iteratively refines the knowledge graph 
 3. LLM support: The llm_provider dictionary in llm_factory lists all currently supported local models. (Commercial model API keys are not enabled here due to cost, but users can purchase them separately and configure in ./config/config-local.yaml.)
 4. Frontend ports and database configurations can be modified in ./config/config-local.yaml (vector DB and NebulaGraph are hardcoded in the code, and need refactoring)
 5. Code structure:
-![avatar](./resource/codestruc/codestruc.bmp)
+<!-- ![avatar](./resource/codestruc/codestruc.bmp) -->
+
+<p align="center">
+  <img src="resource/codestruc/codestruc.bmp" alt="Code structure">
+  <br>
+  <b>Code structure</b>
+</p>
 
 
 
