@@ -32,4 +32,6 @@ llama-index-llms-ollama==0.1.2
 prettytable==3.11.0
 socksio==1.0.0
 overrides==7.7.0
-cupy-cuda11x
+cupy-cuda12x
+pip install vllm==0.6.4.post1 \
+  --extra-index-url https://download.pytorch.org/whl/cu124
