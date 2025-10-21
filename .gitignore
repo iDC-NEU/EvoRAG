@@ -43,5 +43,5 @@ __pycache__/
 
 test.py
 *.sh
-!run.sh
+!run_batch.sh
 

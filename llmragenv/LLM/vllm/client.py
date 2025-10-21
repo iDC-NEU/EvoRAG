@@ -1,6 +1,6 @@
 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import re
 from typing import List, overload
 from overrides import override
@@ -29,7 +29,10 @@ class Vllm(LLMBase):
         llm_config = path_config["LLM"]['vllm']
         if model_name in llm_config:
             self.type = llm_config[model_name]['template_format']
-            self.path = llm_config[model_name]['modelpath']
+            if llm_config[model_name]['modelpath']:
+                self.path = llm_config[model_name]['modelpath']
+            else:
+                self.path = model_name
         else:
             raise ValueError(f"模型 {model_name} 未在配置文件中找到，请检查 path-local.yaml 配置项。")
 
