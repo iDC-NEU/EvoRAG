@@ -48,19 +48,6 @@ pip install -r requirements.txt
 
 ```
 
-⚙️ Configuration
-
-Before running the system, you need to specify the paths for the local LLM model and the cached knowledge graph embeddings in the `config/path-local.yaml` file.  
-
-```yaml
-# Example path-local.yaml
-local_embedding_path: "/your/path/to/entity_embedding.npz"
-LLM:
-  Qwen2.5-32B-Instruct:
-    template_format: Qwen2.5
-    modelpath: "/your/path/to/llm_model"
-```
-
 📦 Deploy Graph Database
 1. NebulaGraph Installation Guide
 Step 1: Install docker-compose
@@ -111,6 +98,36 @@ docker run -d --name nebula-graph \
 
 
 2. Neo4j (Installation optional for now)
+
+
+## ⚙️ Configuration
+
+1. Before running the system, you need to specify the paths for the local LLM model and the cached knowledge graph embeddings in the `config/path-local.yaml` file.  
+
+```yaml
+# Example path-local.yaml
+local_embedding_path: "/your/path/to/entity_embedding.npz"
+LLM:
+  Qwen2.5-32B-Instruct:
+    template_format: Qwen2.5
+    modelpath: "/your/path/to/llm_model"
+```
+
+2. Algorithm and batch settings
+
+You can configure algorithm parameters such as algorithm type, batch_size, etc., in config/algorithm.yaml:
+
+```yaml
+# Example algorithm.yaml
+algorithm: "standard_batch"
+batch_size: 16
+```
+
+Important:
+
+Before running the startup script (run.sh), ensure that the ALGORITHM variable in the script matches the algorithm field in config/algorithm.yaml.
+
+The startup script can also override additional parameters such as the specific LLM model to use, number of iterations, and other runtime settings.
 
 
 
