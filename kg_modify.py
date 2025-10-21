@@ -17,6 +17,7 @@ from database.graph.graph_dbfactory import GraphDBFactory
 from dataset.dataset import Dataset
 from utils.config import algorithm_config
 from box import Box
+from pathlib import Path
 
 import torch
 import torch.distributed as dist
@@ -84,6 +85,24 @@ if __name__ == "__main__":
 
     print(data)
     # assert False
+
+    # # 定义路径
+    # logs_dir = Path("logs")
+    # data_dir = logs_dir / data.algorithm
+    # new_dir = [data_dir / "data", data_dir / "output", data_dir / "stage", data_dir / "triplets",]
+
+
+    # # 检查并创建目录
+    # if not data_dir.exists():
+    #     data_dir.mkdir(parents=True, exist_ok=True)
+    #     print(f"Created directory: {data_dir}")
+
+    # for triple_dir in new_dir:
+    #     if not triple_dir.exists():
+    #         triple_dir.mkdir(parents=True, exist_ok=True)
+    #         print(f"Created directory: {triple_dir}")
+
+    print("All required directories are ready.")
 
     run_with_dataset(data)
     # run_with_dataset(args)
