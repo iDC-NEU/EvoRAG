@@ -7,7 +7,7 @@ FilePath: /lipz/fzb_rag_demo/RAGWebUi_demo/llmragenv/LLM/ollama/client.py
 Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
 '''
 
-import re
+import re, time
 from typing import List, overload
 from llama_index.llms.ollama import Ollama
 # from llama_index.core.llms.types import ChatMessage
@@ -20,15 +20,23 @@ from llama_index.core.utils import print_text
 from llmragenv.LLM.llm_base import LLMBase
 from logger import Logger
 from chat.chat_prompt import llama_instruct_system, llama_instruct_user, qwen2_instruct_system, qwen2_instruct_user, qwen3_instruct_system, qwen3_instruct_user_noThink, qwen3_instruct_user_think
-
+from utils.config import path_config
 
 class OllamaClient(LLMBase):
 
     def __init__(self, model_name, url, key):
         super().__init__()
+
+        llm_config = path_config["LLM"]['ollama']
+        if model_name in llm_config:
+            self.type = llm_config[model_name]['template_format']
+            self.url = llm_config[model_name]['modelpath']
+        else:
+            raise ValueError(f"模型 {model_name} 未在配置文件中找到，请检查 path-local.yaml 配置项。")
+        
         self.model_name  = model_name
         self.llmbackend = "ollama"
-        base_url = re.sub(r'/v\d+', '', url)
+        base_url = re.sub(r'/v\d+', '', self.url)
 
         self.client = Ollama(model=model_name, request_timeout=2000000, base_url=base_url)
 
@@ -54,6 +62,52 @@ class OllamaClient(LLMBase):
     def chat_with_ai_with_system(self, prompt_system: str, prompt_user: str, history: List[List[str]] | None = None, enable_thinking = False) -> str | None:
         # assert False, "HuggingfaceClient does not support chat_with_ai_with_system method. Please use chat_with_ai instead."
         return self.chat_with_ai(prompt_system + prompt_user, history)
+    
+
+    @override
+    def chat_with_ai_with_system(self, prompt_system: str | List[str], prompt_user: str | List[str], history: List[List[str]] | None = None, enable_thinking = False) -> str | None:
+        # assert False, "HuggingfaceClient does not support chat_with_ai_with_system method. Please use chat_with_ai instead."
+        if isinstance(prompt_system, list):
+            prompt_system_user_instruct = []
+            for prompt_system_item, prompt_user_item in zip(prompt_system, prompt_user):
+                # prompt_system_user_instruct.append(prompt_system_item + prompt_user_item)
+                if self.type == 'Llama':
+                    prompt_system_user_instruct.append(llama_instruct_system.format(system_instruction = prompt_system_item)+llama_instruct_user.format(user_instruction = prompt_user_item))
+                elif self.type == 'Qwen2.5':
+                    prompt_system_user_instruct.append(qwen2_instruct_system.format(system_instruction = prompt_system_item)+qwen2_instruct_user.format(user_instruction = prompt_user_item))
+                elif self.type == 'Qwen3':
+                    if enable_thinking:
+                        prompt_system_user_instruct.append(qwen3_instruct_system.format(system_instruction = prompt_system_item)+qwen3_instruct_user_think.format(user_instruction = prompt_user_item))
+                    else:
+                        prompt_system_user_instruct.append(qwen3_instruct_system.format(system_instruction = prompt_system_item)+qwen3_instruct_user_noThink.format(user_instruction = prompt_user_item))
+            return self.chat_with_ai_batch(prompt_system_user_instruct)
+        else:
+            if self.type == 'Llama':
+                prompt_system_instruct = llama_instruct_system.format(system_instruction = prompt_system)
+                prompt_user_instruct = llama_instruct_user.format(user_instruction = prompt_user)
+            elif self.type == 'Qwen2.5':
+                prompt_system_instruct = qwen2_instruct_system.format(system_instruction = prompt_system)
+                prompt_user_instruct = qwen2_instruct_user.format(user_instruction = prompt_user)
+            elif self.type == 'Qwen3':
+                if enable_thinking:
+                    prompt_system_instruct = qwen3_instruct_system.format(system_instruction = prompt_system)
+                    prompt_user_instruct = qwen3_instruct_user_think.format(user_instruction = prompt_user)
+                else:
+                    prompt_system_instruct = qwen3_instruct_system.format(system_instruction = prompt_system)
+                    prompt_user_instruct = qwen3_instruct_user_noThink.format(user_instruction = prompt_user)
+            return self.chat_with_ai(prompt_system_instruct + prompt_user_instruct, history)  
+        
+    def chat_with_ai_batch(self, prompt: List[str], history: List[List[str]] | None = None) -> str | None:
+        start_time = time.time()
+        response = []
+        prompt_len = []
+        for prompt_item in prompt:
+            response_item = self.chat_with_ai(prompt_item)
+            response.append(response_item)
+            prompt_len.append(404)
+        end_time = time.time()
+
+        return response, prompt_len, end_time - start_time
 
     @override
     def chat_with_ai_mulRounds(self, history: list[dict]) -> str:

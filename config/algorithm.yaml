@@ -82,8 +82,9 @@ embedding: # 使用的嵌入模型
   name: "huggingface"
   model: "BAAI/bge-large-en-v1.5"
   # device: "cuda:1"
+  dim: 1024
   device: "cuda:1"
-  batch_size: 20 # 批处理大小
+  batch_size: 48 # 批处理大小
 
 
 shouldRebuildDatabase: false # 是否重建数据库
@@ -167,7 +168,7 @@ basic_batch: # 基础方法
   extract_keywords: "basic"
   retrieve_path: "basic"
   # simThreshold: 0.55 # 相似度阈值
-  simThreshold: 0.0 # 相似度阈值
+  simThreshold: 0 # 相似度阈值
   score_weight: 0.5 # 评分权重，0.5表示相似度和评分各占一半
   scoreThreshold: 61 # 评分阈值
   redundant_process: "basic_only_relationship_strict" # 仅处理冗余关系，并且严格按照头尾相同分组

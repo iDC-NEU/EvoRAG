@@ -8,7 +8,7 @@ from database.graph.nebulagraph.FormatResp import print_resp
 import os
 # import sys
 # sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from utils.config import path_config
+from utils.config import path_config, algorithm_config
 import json
 import numpy as np
 import time
@@ -258,7 +258,8 @@ class NebulaDB(GraphDatabase):
         self.store: NebulaGraphStore = None
 
         # 1. 获取 algorithm 配置并提升到顶层
-        self.loacl_path = path_config["local_embedding_path"]
+        self.local_path = path_config["local_embedding_path"]
+
 
         try:
             self.store, self.storage_context = self.init_nebula_store()
@@ -278,6 +279,38 @@ class NebulaDB(GraphDatabase):
         
         # Do not use get_all_dentities to obtain entities, as the modified entities are out of order
         self.entities, self.entity_embeddings = self.generate_entity_embedding_standard()
+        
+
+        # 路径缓存
+        self.index_path = f"{self.local_path}/{space_name}-path2id.json"
+        self.emb_path = f"{self.local_path}/{space_name}-embeddings.npy"
+
+        self.dim = algorithm_config['embedding']['dim']
+        self.batch_size = algorithm_config['embedding']['batch_size']
+        self.flush_interval = 1000
+        # self.embed_model = EmbeddingEnv(embed_name="BAAI/bge-large-en-v1.5", embed_batch_size=batch_size)
+
+        # --- 加载索引 ---
+        if os.path.exists(self.index_path):
+            print(f"加载已有缓存索引: {self.index_path}")
+            with open(self.index_path, "r", encoding="utf-8") as f:
+                self.path2id = json.load(f)
+        else:
+            print(f"未找到缓存索引，创建新的索引文件: {self.index_path}")
+            self.path2id = {}
+
+        # --- 内存映射嵌入文件 ---
+        self.embeddings = None
+        if os.path.exists(self.emb_path):
+            existing_size = len(self.path2id)
+            print(f"检测到已有嵌入文件，共 {existing_size} 条。")
+            self.embeddings = np.memmap(
+                self.emb_path, dtype=np.float32, mode="r+", shape=(existing_size, self.dim)
+            )
+
+        # --- 临时缓存新嵌入 ---
+        self.new_embeddings = []
+        self.new_paths = []
 
     def __del__(self):
         del self.client
@@ -683,7 +716,7 @@ class NebulaDB(GraphDatabase):
         # file_path = f'/home/hdd/dataset/rag-data/{self.space_name}-triplet-embedding.npz'
         # file_path = f'/home/hdd/dataset/rag-data/rgb-triplet-embedding.npz'
         # file_path = f'/home/hdd/zhangyz/rag-data/{self.space_name}-triplet-embedding-standard.npz'
-        file_path = f'{self.loacl_path}/{self.space_name}-triplet-embedding-standard.npz'
+        file_path = f'{self.local_path}/{self.space_name}-triplet-embedding-standard.npz'
 
         if file_exist(file_path):
             print(f"load embedding from {file_path}")
@@ -733,10 +766,10 @@ class NebulaDB(GraphDatabase):
         return triplet2id, all_embeddings_np
     
     # +++
-    def generate_path_embeddings_with_cache(self, paths):
+    def generate_path_embeddings_with_cache_bak(self, paths):
 
         # cache_path = f'/home/hdd/zhangyz/rag-data/{self.space_name}-path-cache-embedding-standard.npz'
-        cache_path = f'{self.loacl_path}/{self.space_name}-path-cache-embedding-standard.npz'
+        cache_path = f'{self.local_path}/{self.space_name}-path-cache-embedding-standard.npz'
 
         if os.path.exists(cache_path):
             print(f"加载已有缓存: {cache_path}")
@@ -777,6 +810,119 @@ class NebulaDB(GraphDatabase):
         print(f"缓存已更新，共 {len(embeddings_np)} 条嵌入保存至 {cache_path}")
 
         return path2id, embeddings_np
+    
+    def generate_path_embeddings_with_cache(self, paths):
+        paths = list(dict.fromkeys(paths)) # 必须去重
+        cached_paths = set(self.path2id.keys())
+        new_paths = [p for p in paths if p not in cached_paths]
+
+        if not new_paths:
+            print("所有路径已存在缓存中，无需计算新嵌入。")
+            return self.path2id, self._load_all_embeddings()
+
+        print(f"新路径数量: {len(new_paths)} / 总数: {len(paths)}")
+        self.embed_model = EmbeddingEnv(embed_name="BAAI/bge-large-en-v1.5", embed_batch_size=self.batch_size)
+
+        for start in range(0, len(new_paths), self.batch_size):
+            batch = new_paths[start:start + self.batch_size]
+            batch_embeddings = self.embed_model.get_embeddings(batch)
+            for path, emb in zip(batch, batch_embeddings):
+                self.new_paths.append(path)
+                self.new_embeddings.append(np.array(emb, dtype=np.float32))
+
+            # if len(self.new_embeddings) >= self.flush_interval:
+            #     self.flush_cache()
+
+        # 最后一批也写入文件
+        self.flush_cache()
+
+        print(f"缓存已更新，共 {len(self.path2id)} 条嵌入。")
+        return self.path2id, self._load_all_embeddings()
+        # print(f"generate_path_embeddings_with_cache len(self.path2id){len(self.path2id)} len(self.embeddings){len(self.embeddings)}")
+        # return self.path2id, self.embeddings
+
+    # +++
+    def flush_cache_bak(self):
+        """将内存中的新嵌入追加写入文件"""
+        if not self.new_embeddings:
+            return
+
+        print(f"写入 {len(self.new_embeddings)} 条新嵌入到缓存中...")
+        new_embs_np = np.stack(self.new_embeddings)
+
+        # 以 append 方式写入 embeddings.npy
+        with open(self.emb_path, "ab") as f:
+            f.write(new_embs_np.tobytes())
+
+        # 更新 path2id 映射
+        start_id = len(self.path2id)
+        for i, path in enumerate(self.new_paths):
+            self.path2id[path] = start_id + i
+
+        # 保存索引文件
+        with open(self.index_path, "w", encoding="utf-8") as f:
+            json.dump(self.path2id, f, ensure_ascii=False)
+
+        # 清空 buffer
+        self.new_embeddings.clear()
+        self.new_paths.clear()
+
+        # 重新映射内存文件
+        total_size = len(self.path2id)
+        self.embeddings = np.memmap(self.emb_path, dtype=np.float32, mode="r+", shape=(total_size, self.dim))
+    # +++
+    def flush_cache(self):
+        """将内存中的新嵌入追加写入文件"""
+        if not self.new_embeddings:
+            return
+
+        print(f"写入 {len(self.new_embeddings)} 条新嵌入到缓存中...")
+        new_embs_np = np.stack(self.new_embeddings)
+
+        # print(f"flush_cache len(self.new_paths){len(self.new_paths)} len(self.new_embeddings){len(self.new_embeddings)}")
+        # if self.path2id:
+        #     print(f"flush_cache len(self.path2id){len(self.path2id)} len(self.embeddings){len(self.embeddings)}")
+
+        # --- 获取写入前的旧长度 ---
+        old_size = len(self.path2id)
+
+        # --- 以 append 方式写入 embeddings.npy ---
+        with open(self.emb_path, "ab") as f:
+            f.write(new_embs_np.tobytes())
+
+        # --- 更新 path2id ---
+        for i, path in enumerate(self.new_paths):
+            if path not in self.path2id:
+                self.path2id[path] = old_size + i
+            else:
+                print(f"cache path {path}")
+                assert False
+
+        # --- 保存索引文件 ---
+        with open(self.index_path, "w", encoding="utf-8") as f:
+            json.dump(self.path2id, f, ensure_ascii=False)
+
+        # --- 清空 buffer ---
+        self.new_embeddings.clear()
+        self.new_paths.clear()
+
+        # --- 更新 memmap ---
+        total_size = len(self.path2id)
+        self.embeddings = np.memmap(
+            self.emb_path, dtype=np.float32, mode="r+", shape=(total_size, self.dim)
+        )
+
+
+    def _load_all_embeddings(self):
+        """返回完整的嵌入矩阵（仅在需要时加载）"""
+        if self.embeddings is not None:
+            return np.array(self.embeddings)
+        elif os.path.exists(self.emb_path):
+            total_size = len(self.path2id)
+            emb = np.memmap(self.emb_path, dtype=np.float32, mode="r", shape=(total_size, self.dim))
+            return np.array(emb)
+        else:
+            return np.empty((0, self.dim), dtype=np.float32)
 
     
     def remove_entities(self, delete_entities_list):
@@ -836,7 +982,7 @@ class NebulaDB(GraphDatabase):
     def generate_entity_embedding_standard(self):
         # 定义文件路径
         # file_path = f'/home/hdd/zhangyz/rag-data/{self.space_name}-entity-embedding-standard.npz'
-        file_path = f'{self.loacl_path}/{self.space_name}-entity-embedding-standard.npz'
+        file_path = f'{self.local_path}/{self.space_name}-entity-embedding-standard.npz'
         
         # 如果文件存在，则加载嵌入和实体列表
         if file_exist(file_path):
