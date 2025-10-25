@@ -5342,7 +5342,7 @@ class KGModify:
 
         
         # self.dataset.query = self.dataset.query[0:len(self.dataset.query)]
-        self.dataset.query = self.dataset.query[0:10]
+        # self.dataset.query = self.dataset.query[0:10]
         data = []
 
         # 加噪声

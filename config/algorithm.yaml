@@ -102,7 +102,7 @@ pruning: 10 # 每个字体保留的路径数量
 # algorithm: "evolve_shared_prefix" 
 # algorithm: "standard_batch"
 algorithm: "basic_batch"
-batch_size: 4 # 批处理大小，仅在batch_standard算法中使用
+batch_size: 8 # 批处理大小，仅在batch_standard算法中使用
 
 
 # llm_fb_name: "qwen2.5:32b-instruct-fp16" # "qwen3_32b" # 当前向与反向分离时，前向使用该变量找到上一次反向修改的三元组分数

@@ -42,20 +42,15 @@ LLM:
     llama3:8b-instruct-fp16:
       template_format: Llama
       modelpath: http://localhost:11434/v1
-      access_token: ''
     llama3.1:8b-instruct-fp16:
       template_format: Llama
       modelpath: http://localhost:11434/v1
-      access_token: ''
     qwen2.5:32b-instruct-fp16:
       template_format: Qwen
       modelpath: http://localhost:11434/v1
-      access_token: ''
     qwen3:30b-a3b-instruct-2507-fp16:
       template_format: Qwen3
       modelpath: http://localhost:11434/v1
-      access_token: ''
-
 
 
     

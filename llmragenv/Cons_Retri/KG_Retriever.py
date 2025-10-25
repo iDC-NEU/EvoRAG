@@ -638,7 +638,7 @@ class RetrieverGraph(object):
             # for index_temp, (sentences_list, sentence_to_triple_3d)  in enumerate(zip(sentences_2d, sentence_to_triple_4d)): # 用句子生成嵌入
             for index_temp, (sentences_list, sentence_to_triple_3d)  in enumerate(zip(clean_rel_map_list, sentence_to_triple_4d)): # 用符号形式的path生成嵌入
 
-                # 路径嵌入复用
+                # 路径嵌入复用 太慢了
                 # path2id, path_embeddings = self.graph_database.generate_path_embeddings_with_cache(sentences_list)
                 # print(f"retrieve {index_temp} len(path2id):{len(path2id)} len(path_embeddings):{len(path_embeddings)}")
                 

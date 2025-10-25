@@ -93,6 +93,9 @@ if __name__ == '__main__':
                         type=str,
                         required=True,
                         help='dataset name.')
+    parser.add_argument('--algorithm',
+                        type=str,
+                        default=None)
     parser.add_argument("--iteration", type=int, help="number of iteration (e.g., 3, 5 ) ", default=0)
     parser.add_argument("--threshold", type=int, help="Whether to discard triplets below the minimum threshold", default=0)
     parser.add_argument(
@@ -115,7 +118,13 @@ if __name__ == '__main__':
     # else:
     #     with open(f"./logs/triplets/{args.db}.json", "r", encoding="utf-8") as file:
     #         triplets_score = json.load(file)
-    with open(f"./logs/triplets/{args.db}_{args.iteration}.json", "r", encoding="utf-8") as file:
+    
+    if args.algorithm:
+        path = f"./logs/{args.algorithm}/triplets/{args.db}_{args.iteration}.json"
+    else:
+        path = f"./logs/triplets/{args.db}_{args.iteration}.json"
+        
+    with open(path, "r", encoding="utf-8") as file:
         triplets_score = json.load(file)
 
     ###完善代码
@@ -140,7 +149,7 @@ if __name__ == '__main__':
             assert len(x) > 0, triplet
 
 
-    print(f'load {len(loaded_triplets)} triplets from ./logs/triplets/{args.db}_{args.iteration}.json.')
+    print(f'load {len(loaded_triplets)} triplets from {path}.')
 
     # print(f'load {len(loaded_triplets)} triplets from ./logs/triplets/{args.db}.json.')
 
