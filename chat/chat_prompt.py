@@ -674,40 +674,9 @@ score_feedback_prompt_baisc_user = (
   "Do not provide explanations—only output structured results as specified above.\n\n"
   "Query: {question}\n"
   "Last Answer ({flag_TF}): {last_response}\n"
-  "Retrieved Statement Sets: {knowledge_statement_sets}\n"
+  "Retrieved Statement Sets: {knowledge_sequences}\n"
 )
 
-# score_feedback_prompt_standard_system = (
-#     "You are an expert in the field of knowledge graph question answering. You specialize in analyzing questions, retrieved knowledge paths, model-generated answers, and user feedback to evaluate reasoning consistency and path relevance.\n"
-# )
-
-# ```json
-# ```
-
-# **User Feedback**: {flag_TF} # 这个值没有用处
-
-# * Positive score (>0): Path supports the answer (higher = stronger support).
-# * Negative score (<0): Path contradicts the answer.
-# * Zero (0): Path irrelevant or weak and should not be included in the output.
-# * For numeric answers: only exact matches count as supportive.
-# * Note: Every retrieved path must be evaluated and assigned a score according to the rules above (including assigning 0 where appropriate). HOWEVER, the final JSON output's "Path_score" object must only include paths with non-zero scores (i.e., exclude any paths assigned a score of 0). Scores should be numeric (float or int) within [-1, 1].
-
-#   "Path_score": {{
-#     "Path 0": 0.9,
-#     "Path 5": 0.6,
-#     "Path 6": -0.3,
-#     "Path 9": 0.3
-#   }}
-
-#   "Path_score": {{
-#     "Path 0": 0.9,
-#     "Path 1": 0.25,
-#     "Path 2": 0.6,
-#     "Path 3": -0.3,
-#     "Path 4": 0.3
-#   }}
-
-# * Zero (0): Path irrelevant or weak.
 
 score_feedback_prompt_standard_system = '''You are an expert in knowledge graph question answering. Your sole task is to output a **valid JSON object** that conforms to the required structure.
 You must **not** output explanations, markdown, or any text outside the JSON.'''

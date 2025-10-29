@@ -403,7 +403,7 @@ class Extract_model:
         )
 
 
-    def parallel_insert(self, db_name, nproc=1, reuse=False):
+    def parallel_insert(self, db_name, nproc=1, reuse=False, init = True):
         start_time = time.time()
         processes = []
         n_triplets = len(self.triplets)
@@ -414,7 +414,7 @@ class Extract_model:
         print(n_triplets, db_name, nproc, step)
         print(f'\ninsert {n_triplets} triplets in {db_name}, nproc={nproc}')
 
-        nebula_db = NebulaDB(space_name = db_name)
+        nebula_db = NebulaDB(space_name = db_name, init = init)
         if not reuse:
             nebula_db.clear()
 
@@ -447,9 +447,9 @@ if __name__ == "__main__":
         description="Process some entities and triplets for knowledge extraction."
     )
 
-    parser.add_argument("--llm", type=str, default="llama3.3", help="llm model.")
+    parser.add_argument("--llm", type=str, default="llama3:8b-instruct-fp16", help="llm model.")
 
-    parser.add_argument("--dataset_name", type=str, default="concurrentqa", help="dataset")
+    parser.add_argument("--dataset_name", type=str, default="rgb", help="dataset")
     parser.add_argument("--llmbackend", type=str, help="openai or llama_index", default="llama_index")
     parser.add_argument("--option", type=str, help="execution way (e.g., extract_triplets, insert_nebulagraph ) ", default='extract_triplets')
 
@@ -477,3 +477,4 @@ if __name__ == "__main__":
 # python -m dataset.extract_triples --llm llama3:8b --llmbackend llama_index --dataset_name metaqa --option insert_nebulagraph
 
 # python -m dataset.extract_triples --llm llama3:8b --llmbackend llama_index --dataset_name hotpotqa_1 --option rebuild_nebulagraph
+# python -m dataset.extract_triples --llm llama3:8b-instruct-fp16 --llmbackend llama_index --dataset_name rgb_fzb --option rebuild_nebulagraph

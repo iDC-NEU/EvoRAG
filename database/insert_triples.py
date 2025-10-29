@@ -86,7 +86,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--db',
                         type=str,
-                        default=None,
+                        default="None",
                         help='database name, e.g. test.')
     parser.add_argument('--reuse', action='store_true', help="reuse database")
     parser.add_argument('--data',
