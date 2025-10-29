@@ -4108,6 +4108,106 @@ class ChatGraphRAG(ChatBase):
                 print(f"feedback_standard_shared_prefix_batch output chat error: {e}\nllm response: {response_batch}")
                 retry += 1       
         return [], [], 0
+    
+    # +++
+    def chat_without_stream_for_leaderboardStrategy_feedback_shared_prefix_batch(self, query: List[str], response: List[str], triplet_unique_batch: List[str], TF_list: List[int]):
+        context_batch = []
+        for triplet_unique in triplet_unique_batch:
+            context = ""
+            for idx, (h, r, t) in enumerate(triplet_unique, start=0):
+                context += f"Path {idx}:\t{h} {r.replace('_',' ')} {t}\n"
+            context_batch.append(context)
+        prompt_system_batch = []
+        prompt_user_batch = []
+        for i in range(len(query)):
+            prompt_system = shared_prefix.format(knowledge_sequences = context_batch[i])
+            # prompt_user = score_feedback_prompt_standard_user_shared_prefix.format(question = query[i], last_response = response[i])
+            prompt_user = score_feedback_prompt_leaderboardStrategy_user_shared_prefix.format(question = query[i], last_response = response[i], flag_TF = "Correct" if TF_list[i] else "Incorrect")
+            prompt_system_batch.append(prompt_system)
+            prompt_user_batch.append(prompt_user)
+            # print(f"-----prompt----\n{prompt_system}\n{prompt_user}")
+
+        output = []
+        prompt_len = []
+        response_batch = []
+        generate_time = 0
+        retry = 1
+        while retry <= 3:
+            try:
+                # output = self._llm.chat_with_ai(prompt)
+                response_batch, prompt_len, generate_time = self._llm.chat_with_ai_with_system(prompt_system_batch, prompt_user_batch)
+                # output, prompt_len, generate_len, end2end_time, generate_time, prefill_time, decode_time, wait_scheduled_time = self._llm.chat_with_ai_with_system(prompt_system, prompt_user)
+                for i in range(len(response_batch)):
+                    print(f"chat_without_stream_for_leaderboardStrategy_feedback_shared_prefix_batch {i} feedback response {response_batch[i]}")
+                    try:
+                        res_parsed = {
+                            "Insufficient_information": False,
+                            'No_feedback': False,
+                            "correct_numbers": {},
+                            "error_numbers": {},
+                        }
+                        res_parsed_str = response_batch[i].strip("`\n ").split('\n')
+
+                        correct_numbers = {}
+                        error_numbers = {}
+                        insufficient_str = ''
+                        for line in res_parsed_str:
+                            # if line.strip() == 'Insufficient search information':
+                            if 'Insufficient information' in line.strip():
+                                res_parsed['Insufficient_information'] = True
+                                # continue
+                                break
+                            elif "No feedback" in line.strip():
+                                res_parsed['No_feedback'] = True
+                                # continue
+                                break
+                            elif line.strip().startswith("Correct: "):
+                                correct_pairs = line.strip().split("Correct:")[1].strip().split()
+                                for pair in correct_pairs:
+                                    parts = pair.split(":")
+                                    if len(parts) == 2:
+                                        try:
+                                            number, degree = map(int, parts)
+                                            # correct_numbers[int(number)] = int(degree)
+                                            res_parsed["correct_numbers"][int(number)] = int(degree)
+                                        except ValueError as e:
+                                            print(f"------------ There is a degree score error in the response; please check and revise it once. ----------ValueError: {e}-----")
+                                        except Exception as e:
+                                            print(f"------------ There is a degree score error in the response; please check and revise it once. ----------Exception: {e}-----")
+                                    else:
+                                        print(f"------------ There is a degree score error in the response; please check and revise it once. ---------------")
+                            elif line.strip().startswith('Error: '):
+                                error_pairs = line.strip().split("Error:")[1].strip().split()
+                                for pair in error_pairs:
+                                    parts = pair.split(":")
+                                    if len(parts) == 2:
+                                        try:
+                                            number, degree = map(int, parts)
+                                            # error_numbers[int(number)] = int(degree)
+                                            res_parsed["error_numbers"][int(number)] = int(degree)
+                                        except ValueError as e:
+                                            print(f"------------ There is a degree score error in the response; please check and revise it once. ----------ValueError: {e}-----")
+                                        except Exception as e:
+                                            print(f"------------ There is a degree score error in the response; please check and revise it once. ----------Exception: {e}-----")
+                                    else:
+                                        print(f"------------ There is a degree score error in the response; please check and revise it once. ---------------")
+                        # assert (correct_numbers or error_numbers or insufficient_str)
+                        # return insufficient_str, correct_numbers, error_numbers
+                    except Exception as e:
+                        print(f"Parse error: {e} | Response: {response_batch[i]}")
+                        res_parsed = {
+                            "Insufficient_information": True,
+                            'No_feedback': True,
+                            "correct_numbers": {},
+                            "error_numbers": {},
+                        }
+                    output.append(res_parsed)
+
+                return output, prompt_len, generate_time
+            except Exception as e:
+                print(f"feedback_standard_shared_prefix_batch output chat error: {e}\nllm response: {response_batch}")
+                retry += 1       
+        return [], [], 0
         
     def chat_without_stream_for_socre_feedback_multi_round_dialogue(self, message: str, history : List[Dict[str, str]], response : str, retrieve_result = [], flag_TF = True):
         # retrieve_str = ""

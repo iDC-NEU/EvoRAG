@@ -149,6 +149,81 @@ Quickly identify and score a **maximum of 6** key supporting or contradicting pa
 **Output**:
 '''
 
+score_feedback_prompt_leaderboardStrategy_user_shared_prefix = '''
+### Task: Evaluate and Score Statement Sets
+
+Your task is to evaluate sets of retrieved statements based on the query and the correctness of the 'Last Answer'.
+
+Crucially, your evaluation must be **exceptionally strict** regarding numerical values, dates, quantities, statistics, named entities, and other precise factual details derived from the collective information of the set. **Exact, literal matches** of the information conveyed by the entire set are paramount.
+
+### Pre-condition for Scoring
+
+**1. Handling 'Insufficient Information':**
+Regardless of whether the Last Response was correct or incorrect, if it explicitly states that it cannot answer the query due to insufficient or irrelevant information, or requests more details (e.g., contains phrases like 'insufficient information to determine', 'need more context', 'based on the provided snippets/statements...'), do not evaluate or score any sets of statements.
+In this specific case, your only output should be the phrase 'Insufficient information'. Do not proceed with the scoring rules below.
+
+### Evaluation Criteria (Apply only if the pre-condition above is NOT met)
+
+**1. If the Last Response was Correct:**
+You will evaluate two potential types of sets of statements in this case:
+
+* **Score Supporting Correct Sets of Statements:**
+    Assign a score only to sets of statements where the combined information from all statements within the set, when taken together, provides specific and exact facts that directly justify the correct answer. The set as a whole must unambiguously and explicitly lead to or express the key facts needed to answer the question correctly. It is not necessary for every individual statement in the set to contain the complete correct answer, as long as their combination does.
+    
+    *Score from 1 to 3:*
+    * **3** = The set is highly relevant, its collective information is precise and essential; the combined statements provide the exact fact or strong logical support for the answer.
+    * **2** = The set is relevant and its collective information is mostly correct, but the combined information may be slightly indirect, or some statements within the set might be redundant if others already establish the point.
+    * **1** = The set provides weak but still factual collective support for the correct answer.
+
+* **Score Contradictory or Misleading Sets of Statements:**
+    Assign a score only to sets of statements where the combined information, when taken together, contains factual inaccuracies or strongly suggests incorrect conclusions that would contradict the actual correct answer. It is not necessary for every individual statement in the set to be contradictory, as long as the collective meaning of the set is contradictory.
+    
+    *Score from 1 to 3* depending on how directly and convincingly the set as a whole would mislead or contradict the correct answer.
+
+**2. If the Last Response was Incorrect:**
+You will evaluate only one type of set of statements in this case:
+
+* **Score Sets of Statements Supporting the Error (Exact Match Rule for Collective Information):**
+    Assign a score only to sets of statements whose collective factual content, when all statements are considered together, **exactly and literally matches** the specific incorrect information present in the Last Response. It is not necessary for every individual statement in the set to contain the full error, as long as their combination directly supports the specific error.
+    
+    *Score from 1 to 3*, with 3 indicating the set's combined information provides direct, unambiguous, and exact factual support for the specific error. Do not score sets whose collective information provides only vague or approximate matches to the error. Crucially, do not score sets of statements that collectively provide the correct answer in this scenario.
+
+### General Rules for Relevance and Scoring
+
+* **Direct Relevance of the Set Only:** Only evaluate sets of statements that, as a collective unit, directly address or support the answering of the core factual question posed by the query. Ignore sets providing only general or contextual statements not directly contributing to this.
+* **Precision is Paramount (for Collective Information):**
+    * Dates, quantities, named entities, and identifiers derived from the collective information of the set must match exactly where precision is required by the query or for evaluating correctness/error.
+    * Sets supporting a correct answer must, through their combined information, affirm the exact constraints required by the query perfectly.
+    * Sets supporting an incorrect answer must, through their combined information, perfectly mirror the specific erroneous value and context from the Last Response.
+* **Constraint Mismatches:** Sets of statements where the overall information presented by the set fails the query's specific constraints (e.g., wrong year, different metric for the collective data) are irrelevant for scoring as 'Correct'. They are also irrelevant for scoring as 'Error' unless the set as a whole perfectly matches the specific error made in the Last Response regarding that mismatched constraint/value.
+* **No New Information:** Do not score sets of statements that, when taken together, merely repeat parts of the query without adding new, collectively useful factual information.
+* **Context of Last Response:** Do not score a set as 'Correct' (supporting the correct answer) if the Last Response was incorrect. Similarly, the 'Contradictory' category applies primarily when the Last Response was correct.
+
+### Output Format (Strictly Required)
+
+* For scored sets supporting a correct answer: `Correct: <set_index>:<score> <set_index>:<score> ...`
+* For scored sets supporting an error or being contradictory/misleading: `Error: <set_index>:<score> <set_index>:<score> ...`
+* If no sets of statements are scored as either Correct or Error after evaluation: return `No feedback`
+* If the 'Insufficient Information' pre-condition is met: return `Insufficient information`
+
+Do not provide explanations—only output structured results as specified above.
+
+### Example Output Structures
+Correct: 2:3 5:2
+Error: 3:3 7:1
+Correct: 1:3
+Error: 4:3
+No feedback
+Insufficient information
+
+---
+
+### Input for Scoring
+
+**Query**: {question}
+**Last Answer ({flag_TF})**: {last_response}
+'''
+
 score_feedback_prompt_standard_user_shared_prefix_bak = '''
 ### Task: Identify Key Evidence Paths
 

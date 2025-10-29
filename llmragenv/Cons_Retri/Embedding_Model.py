@@ -6,6 +6,8 @@ LastEditTime: 2024-10-21 19:22:02
 FilePath: /BigModel/RAGWebUi_demo/llmragenv/Cons_Retri/Embedding_Model.py
 Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
 '''
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # 必须在导入 torch 或 vllm 之前设置！
 import numpy as np
 from transformers import AutoTokenizer, AutoModel
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding

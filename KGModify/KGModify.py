@@ -5012,6 +5012,59 @@ class KGModify:
                             self.logger.log(f" {sentence}, old score: {old_score}, new score : {new_score}")
                         else:
                             self.logger.log(f" {sentence}, the retrival result don't exit in triplets score &&&&&")
+        
+        elif method == "leaderboardStrategy":
+            # 此时 filtered_retrieve_result 是 triplet_unique
+            score_weight = args_param.score_weight
+
+            triplet_unique_list = []
+            context = ""
+            for idx, (h, r, t) in enumerate(filtered_retrieve_result, start=0):
+                context += f"Path {idx}:\t{h} {r.replace('_',' ')} {t}\n"
+                triplet_unique_list.append((h, r, t))
+                            
+            self.logger.log(f"triplet unique:\n{context}")
+            self.logger.log(f"{json.dumps(response_dict, indent=2)}")
+
+            if feedback_noise:
+                flag_TF = not flag_TF
+                print(f"----------------feedback_noise-------------: original: {not flag_TF}, now: {flag_TF}")
+            if response_dict['Insufficient_information']:
+                self.logger.log(f"Insufficient_information is True, no feedback processed.")
+                pass
+            elif response_dict['No_feedback']:
+                self.logger.log(f"No_feedback is True, no feedback processed.")
+            else:
+                for idx, (h, r, t) in enumerate(triplet_unique_list, start=0):
+                    if idx in response_dict['correct_numbers']:
+                        score = response_dict['correct_numbers'][idx] * 5
+                        sentence = f"{h} {r} {t}"
+                        if sentence in self.triplets_score:
+                            old_score = self.triplets_score[sentence]['score']
+                            new_score = old_score + score
+                            if new_score > self.args.score_max:
+                                new_score = self.args.score_max
+                            if new_score < self.args.score_min:
+                                new_score = self.args.score_min
+                            self.triplets_score[sentence]['score'] = new_score
+                            self.logger.log(f" {sentence}, old score: {old_score}, new score : {new_score}")
+                        else:
+                            self.logger.log(f" {sentence}, the retrival result don't exit in triplets score &&&&&")
+                    elif idx in response_dict['error_numbers']:
+                        score = response_dict['error_numbers'][idx] * 5
+                        sentence = f"{h} {r} {t}"
+                        if sentence in self.triplets_score:
+                            old_score = self.triplets_score[sentence]['score']
+                            new_score = old_score - score
+                            if new_score > self.args.score_max:
+                                new_score = self.args.score_max
+                            if new_score < self.args.score_min:
+                                new_score = self.args.score_min
+                            self.triplets_score[sentence]['score'] = new_score
+                            self.logger.log(f" {sentence}, old score: {old_score}, new score : {new_score}")
+                        else:
+                            self.logger.log(f" {sentence}, the retrival result don't exit in triplets score &&&&&")
+
 
     def evolve_basic_feedback(self):
 
@@ -5503,6 +5556,16 @@ class KGModify:
                         data[index]['feedback_response_time'] = feedback_response_time/len(feedback_response_batch)
                         feedback_prompt.append(prompt_len[i])
                     feedback_response_total_time.append(feedback_response_time)
+                elif self.args.feedback_process == "leaderboardStrategy":
+                    feedback_response_batch, prompt_len, feedback_response_time = self.graphrag.chat_without_stream_for_leaderboardStrategy_feedback_shared_prefix_batch(self.dataset.query[start_index: end_index], self.response[start_index: end_index], triplet_unique_batch, acc_list[start_index: end_index])
+
+                    for i, index in enumerate(range(start_index, end_index)):
+                        data[index]['feedback_response'] = feedback_response_batch[i]
+                        data[index]['feedback_prompt_tokens'] = prompt_len[i]
+                        data[index]['feedback_response_time'] = feedback_response_time/len(feedback_response_batch)
+                        feedback_prompt.append(prompt_len[i])
+                    feedback_response_total_time.append(feedback_response_time)
+
                 logger.log(f"feedback response time for batch: {feedback_response_time} seconds")
 
             # 记录整个batch的log
@@ -5527,7 +5590,7 @@ class KGModify:
 
                 # 反馈处理
                 if self.args.feedback:
-                    if self.args.feedback_process == 'standard_for_path_shared_prefix' or self.args.feedback_process == 'basic_for_triplet_shared_prefix':
+                    if self.args.feedback_process == 'standard_for_path_shared_prefix' or self.args.feedback_process == 'basic_for_triplet_shared_prefix' or self.args.feedback_process == "leaderboardStrategy":
                         feedback_process_start_time = time.perf_counter()
                         self.feedback_process_one(
                             method = self.args.feedback_process,

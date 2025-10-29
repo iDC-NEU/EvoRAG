@@ -1,6 +1,6 @@
 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0, 2"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1, 2"
 import re
 from typing import List, overload
 from overrides import override
