@@ -18,6 +18,7 @@ __pycache__/
 
 !/dataset/dataset.py
 !/dataset/extract_triples.py
+!/dataset/generate_similar_questions.py
 !/dataset/Concurrent_process.py
 !/dataset/Hotpotqa_process.py
 !/dataset/MuSique_Ans_process.py
